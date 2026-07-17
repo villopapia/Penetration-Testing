@@ -489,16 +489,29 @@ def _dedupe_findings(alerts: list[dict[str, Any]]) -> list[dict[str, Any]]:
 DORA_ARTICLE_TEXT: dict[str, str] = {
     "24_1_a": "Art. 24(1)(a) — ICT security testing",
     "24_1_b": "Art. 24(1)(b) — Assessment of ICT third-party dependencies",
+    "24_1_c": "Art. 24(1)(c) — Testing of ICT systems supporting critical/important functions",
+    "9_4": "Art. 9(4) — ICT security policies, protocols and tools",
 }
 
 _DORA_KEYWORD_MAP: list[tuple[tuple[str, ...], str]] = [
+    (("brute force", "brute-force", "account lockout", "rate limiting",
+      "credential stuffing", "default credential", "weak password",
+      "password polic", "cleartext http"), "24_1_a"),
+    (("prompt injection", "llm", "large language model", "chatbot",
+      "ai assistant", "system prompt", "prompt leakage"), "24_1_c"),
+    (("vulnerable javascript library", "vulnerable js library",
+      "outdated javascript library", "known cve", "cve-"), "24_1_b"),
+    (("exposed admin", "administrative interface", "rdp", "smb port",
+      "directory listing", "backup file", "ransomware", "exposed service port",
+      "exposed sensitive file", "exposed version control"), "9_4"),
     (("cookie", "session"), "24_1_a"),
     (("content security policy", "csp", "xss", "cross site scripting"), "24_1_a"),
     (("csrf", "cross-site request forgery", "cross site request forgery"), "24_1_a"),
     (("cross-domain javascript", "cross domain javascript", "third-party",
       "third party", "external resource", "loading of"), "24_1_b"),
     (("information disclosure", "information leakage", "disclosure"), "24_1_a"),
-    (("sub resource integrity", "subresource integrity", "sri"), "24_1_b"),
+    (("sub resource integrity", "subresource integrity", "sri",
+      "missing subresource integrity"), "24_1_b"),
     (("cache control", "cache-control", "caching"), "24_1_a"),
 ]
 _DORA_DEFAULT = "24_1_a"
@@ -523,12 +536,18 @@ _THIRD_PARTY_KEYWORDS: tuple[str, ...] = (
     "cross domain javascript",
     "sub resource integrity",
     "subresource integrity",
+    "missing subresource integrity",
     "sri",
     "external resource",
     "third-party",
     "third party",
     "loading of",
     "cdn",
+    "vulnerable javascript library",
+    "vulnerable js library",
+    "outdated javascript library",
+    "npm",
+    "cve-",
 )
 
 
@@ -1344,6 +1363,10 @@ _DORA_RISK_CATEGORIES = {
             "cookie", "session", "csrf", "cross-site", "xss",
             "content security policy", "csp", "cache", "configuration",
             "security", "vulnerability", "injection", "authentication",
+            "brute force", "rate limiting", "default credential",
+            "password polic", "admin", "backup", "directory listing",
+            "ransomware", "rdp", "smb", "exposed service port",
+            "exposed sensitive file", "missing security header",
         ],
     },
     "incident_reporting": {
@@ -1362,6 +1385,8 @@ _DORA_RISK_CATEGORIES = {
             "third-party", "third party", "external", "cdn",
             "subresource integrity", "sri", "dependency",
             "availability", "denial", "dos",
+            "prompt injection", "llm", "chatbot", "cve",
+            "vulnerable javascript", "outdated javascript",
         ],
     },
 }

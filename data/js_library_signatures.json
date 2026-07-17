@@ -1,0 +1,242 @@
+{
+  "jQuery": {
+    "cdn_patterns": [
+      "jquery[.-]([\\d.]+(?:min)?\\.js)",
+      "code\\.jquery\\.com/jquery[.-]([\\d.]+)"
+    ],
+    "inline_patterns": [
+      "/\\*!? jQuery (?:JavaScript Library )?v([\\d.]+)",
+      "jQuery v([\\d.]+)"
+    ],
+    "ecosystem": "npm",
+    "package_name": "jquery"
+  },
+  "React": {
+    "cdn_patterns": [
+      "react(?:\\.production|\\.development)?(?:\\.min)?\\.js.*?([\\d.]+)",
+      "unpkg\\.com/react@([\\d.]+)"
+    ],
+    "inline_patterns": [
+      "React v([\\d.]+)",
+      "/\\*!? React v([\\d.]+)"
+    ],
+    "ecosystem": "npm",
+    "package_name": "react"
+  },
+  "Angular": {
+    "cdn_patterns": [
+      "angular(?:\\.min)?\\.js.*?([\\d.]+)",
+      "ajax\\.googleapis\\.com/ajax/libs/angularjs/([\\d.]+)"
+    ],
+    "inline_patterns": [
+      "AngularJS v([\\d.]+)",
+      "@angular/core.*?([\\d.]+)"
+    ],
+    "ecosystem": "npm",
+    "package_name": "@angular/core"
+  },
+  "Vue": {
+    "cdn_patterns": [
+      "vue(?:\\.global|\\.runtime)?(?:\\.prod)?(?:\\.min)?\\.js.*?([\\d.]+)",
+      "unpkg\\.com/vue@([\\d.]+)"
+    ],
+    "inline_patterns": [
+      "Vue\\.js v([\\d.]+)",
+      "/\\*!? Vue\\.js v([\\d.]+)"
+    ],
+    "ecosystem": "npm",
+    "package_name": "vue"
+  },
+  "Bootstrap": {
+    "cdn_patterns": [
+      "bootstrap(?:\\.bundle)?(?:\\.min)?(?:\\.js|\\.css).*?([\\d.]+)",
+      "stackpath\\.bootstrapcdn\\.com/bootstrap/([\\d.]+)"
+    ],
+    "inline_patterns": [
+      "Bootstrap v([\\d.]+)",
+      "/\\*!? Bootstrap v([\\d.]+)"
+    ],
+    "ecosystem": "npm",
+    "package_name": "bootstrap"
+  },
+  "Lodash": {
+    "cdn_patterns": [
+      "lodash(?:\\.min)?\\.js.*?([\\d.]+)",
+      "unpkg\\.com/lodash@([\\d.]+)"
+    ],
+    "inline_patterns": [
+      "lodash ([\\d.]+)",
+      "/\\*!? lodash ([\\d.]+)"
+    ],
+    "ecosystem": "npm",
+    "package_name": "lodash"
+  },
+  "Moment.js": {
+    "cdn_patterns": [
+      "moment(?:\\.min)?\\.js.*?([\\d.]+)",
+      "cdnjs\\.cloudflare\\.com/ajax/libs/moment\\.js/([\\d.]+)"
+    ],
+    "inline_patterns": [
+      "//! moment\\.js$",
+      "//! version : ([\\d.]+)",
+      "moment\\.version.*?([\\d.]+)"
+    ],
+    "ecosystem": "npm",
+    "package_name": "moment"
+  },
+  "D3": {
+    "cdn_patterns": [
+      "d3(?:\\.min)?\\.js.*?([\\d.]+)",
+      "d3js\\.org/d3\\.v(\\d+)"
+    ],
+    "inline_patterns": [
+      "d3\\.version.*?([\\d.]+)",
+      "/\\*!? d3 v([\\d.]+)"
+    ],
+    "ecosystem": "npm",
+    "package_name": "d3"
+  },
+  "Backbone": {
+    "cdn_patterns": [
+      "backbone(?:\\.min)?\\.js.*?([\\d.]+)",
+      "cdnjs\\.cloudflare\\.com/ajax/libs/backbone\\.js/([\\d.]+)"
+    ],
+    "inline_patterns": [
+      "Backbone\\.js ([\\d.]+)",
+      "Backbone\\.VERSION.*?([\\d.]+)"
+    ],
+    "ecosystem": "npm",
+    "package_name": "backbone"
+  },
+  "Ember": {
+    "cdn_patterns": [
+      "ember(?:\\.debug|\\.prod)?(?:\\.min)?\\.js.*?([\\d.]+)"
+    ],
+    "inline_patterns": [
+      "Ember\\.VERSION.*?([\\d.]+)",
+      "ember ([\\d.]+)"
+    ],
+    "ecosystem": "npm",
+    "package_name": "ember-source"
+  },
+  "Three.js": {
+    "cdn_patterns": [
+      "three(?:\\.min)?\\.js.*?r?(\\d+)",
+      "unpkg\\.com/three@([\\d.]+)"
+    ],
+    "inline_patterns": [
+      "THREE\\.REVISION.*?(\\d+)",
+      "three\\.js r?(\\d+)"
+    ],
+    "ecosystem": "npm",
+    "package_name": "three"
+  },
+  "Axios": {
+    "cdn_patterns": [
+      "axios(?:\\.min)?\\.js.*?([\\d.]+)",
+      "unpkg\\.com/axios@([\\d.]+)"
+    ],
+    "inline_patterns": [
+      "axios v([\\d.]+)",
+      "/\\*! Axios v([\\d.]+)"
+    ],
+    "ecosystem": "npm",
+    "package_name": "axios"
+  },
+  "Underscore": {
+    "cdn_patterns": [
+      "underscore(?:\\.min)?\\.js.*?([\\d.]+)",
+      "cdnjs\\.cloudflare\\.com/ajax/libs/underscore\\.js/([\\d.]+)"
+    ],
+    "inline_patterns": [
+      "Underscore\\.js ([\\d.]+)",
+      "_.VERSION.*?([\\d.]+)"
+    ],
+    "ecosystem": "npm",
+    "package_name": "underscore"
+  },
+  "Handlebars": {
+    "cdn_patterns": [
+      "handlebars(?:\\.runtime)?(?:\\.min)?\\.js.*?([\\d.]+)",
+      "cdnjs\\.cloudflare\\.com/ajax/libs/handlebars\\.js/([\\d.]+)"
+    ],
+    "inline_patterns": [
+      "Handlebars v([\\d.]+)",
+      "Handlebars\\.VERSION.*?([\\d.]+)"
+    ],
+    "ecosystem": "npm",
+    "package_name": "handlebars"
+  },
+  "Socket.io": {
+    "cdn_patterns": [
+      "socket\\.io(?:\\.min)?\\.js.*?([\\d.]+)",
+      "cdn\\.socket\\.io/([\\d.]+)"
+    ],
+    "inline_patterns": [
+      "socket\\.io-client.*?([\\d.]+)",
+      "io\\.version.*?([\\d.]+)"
+    ],
+    "ecosystem": "npm",
+    "package_name": "socket.io"
+  },
+  "Chart.js": {
+    "cdn_patterns": [
+      "chart(?:\\.min)?\\.js.*?([\\d.]+)",
+      "cdnjs\\.cloudflare\\.com/ajax/libs/Chart\\.js/([\\d.]+)"
+    ],
+    "inline_patterns": [
+      "Chart\\.js v([\\d.]+)",
+      "/\\*!? Chart\\.js v([\\d.]+)"
+    ],
+    "ecosystem": "npm",
+    "package_name": "chart.js"
+  },
+  "Leaflet": {
+    "cdn_patterns": [
+      "leaflet(?:\\.min)?(?:\\.js|\\.css).*?([\\d.]+)",
+      "unpkg\\.com/leaflet@([\\d.]+)"
+    ],
+    "inline_patterns": [
+      "Leaflet ([\\d.]+)",
+      "L\\.version.*?([\\d.]+)"
+    ],
+    "ecosystem": "npm",
+    "package_name": "leaflet"
+  },
+  "Popper.js": {
+    "cdn_patterns": [
+      "popper(?:\\.min)?\\.js.*?([\\d.]+)",
+      "unpkg\\.com/@popperjs/core@([\\d.]+)"
+    ],
+    "inline_patterns": [
+      "Popper v([\\d.]+)",
+      "@popperjs/core.*?([\\d.]+)"
+    ],
+    "ecosystem": "npm",
+    "package_name": "@popperjs/core"
+  },
+  "Select2": {
+    "cdn_patterns": [
+      "select2(?:\\.full)?(?:\\.min)?(?:\\.js|\\.css).*?([\\d.]+)",
+      "cdnjs\\.cloudflare\\.com/ajax/libs/select2/([\\d.]+)"
+    ],
+    "inline_patterns": [
+      "Select2 ([\\d.]+)",
+      "select2/select2.*?([\\d.]+)"
+    ],
+    "ecosystem": "npm",
+    "package_name": "select2"
+  },
+  "DataTables": {
+    "cdn_patterns": [
+      "dataTables(?:\\.min)?(?:\\.js|\\.css).*?([\\d.]+)",
+      "cdn\\.datatables\\.net/([\\d.]+)"
+    ],
+    "inline_patterns": [
+      "DataTables ([\\d.]+)",
+      "DataTable.*?version.*?([\\d.]+)"
+    ],
+    "ecosystem": "npm",
+    "package_name": "datatables.net"
+  }
+}

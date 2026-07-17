@@ -118,6 +118,28 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="URL patterns excluded from scanning",
     )
+    p.add_argument(
+        "--custom-modules",
+        nargs="*",
+        default=None,
+        choices=["auth", "supply-chain", "prompt-injection", "ransomware", "all"],
+        help="Run custom Python security modules alongside the ZAP scan",
+    )
+    p.add_argument(
+        "--modules-confirm",
+        action="store_true",
+        help="Authorise active tests within --custom-modules",
+    )
+    p.add_argument(
+        "--network-scan",
+        action="store_true",
+        help="Enable network port scan in ransomware module",
+    )
+    p.add_argument(
+        "--check-manifests",
+        action="store_true",
+        help="Enable manifest probing in supply-chain module",
+    )
     return p
 
 
@@ -191,6 +213,10 @@ def main() -> None:
     print(f"  DORA section: included")
     if args.manual_findings:
         print(f"  Manual finds: {args.manual_findings}")
+    if args.custom_modules:
+        print(f"  Modules     : {', '.join(args.custom_modules)}")
+        if args.modules_confirm:
+            print(f"  Mod. active : yes (--modules-confirm)")
     print(f"  Output      : {output_path}")
     print(f"{'='*60}")
     print(
@@ -220,6 +246,23 @@ def main() -> None:
 
     _log_scan_event("SCAN_END", args.target, "full",
                     extra=f"alerts={len(raw_alerts)}")
+
+    # --- Custom modules (optional) ---
+    if args.custom_modules:
+        from run_modules import run_selected_modules
+        module_list = args.custom_modules
+        module_raw_alerts = run_selected_modules(
+            args.target,
+            modules=module_list,
+            confirm=args.modules_confirm,
+            timeout=args.timeout,
+            extra_args={
+                "network_scan": args.network_scan,
+                "check_manifests": args.check_manifests,
+            },
+        )
+        raw_alerts = raw_alerts + module_raw_alerts
+        print(f"\nCustom modules added {len(module_raw_alerts)} finding(s)")
 
     # --- Load optional inputs ---
     manual_findings: list[dict[str, Any]] | None = None
