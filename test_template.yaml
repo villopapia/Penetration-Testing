@@ -1,0 +1,193 @@
+# MANUAL PENTEST FINDINGS -- fill in each item below.
+# status: one of not_tested | pass | fail | not_applicable
+# severity: required if status is "fail" -- one of Critical | High | Medium | Low
+# Leave status as "not_tested" if you have not yet performed this test --
+# the combined report will flag any remaining not_tested items.
+
+meta:
+  target: https://www.cysec.gov.cy/en-GB/home/
+  tester: ''
+  test_date: ''
+  authorization_reference: ''
+authentication:
+  auth_weak_password_policy:
+    test: Weak password policy — trivial passwords rejected on registration/change
+    status: not_tested
+    severity: null
+    evidence: ''
+    steps_to_reproduce: ''
+  auth_brute_force_lockout:
+    test: Brute-force / rate limiting — lockout, delay, or CAPTCHA after N failed
+      attempts
+    status: not_tested
+    severity: null
+    evidence: ''
+    steps_to_reproduce: ''
+  auth_reset_token_strength:
+    test: Password reset token strength — long, random, single-use, time-limited
+    status: not_tested
+    severity: null
+    evidence: ''
+    steps_to_reproduce: ''
+  auth_reset_token_reuse:
+    test: Password reset token reuse — reused link after use must fail
+    status: not_tested
+    severity: null
+    evidence: ''
+    steps_to_reproduce: ''
+  auth_session_fixation:
+    test: Session fixation — session token changes on login/logout
+    status: not_tested
+    severity: null
+    evidence: ''
+    steps_to_reproduce: ''
+  auth_session_expiry:
+    test: Session expiry — enforced idle/absolute timeout
+    status: not_tested
+    severity: null
+    evidence: ''
+    steps_to_reproduce: ''
+  auth_token_tampering:
+    test: Token tampering (JWT or similar) — server validates signature on modified
+      claims
+    status: not_tested
+    severity: null
+    evidence: ''
+    steps_to_reproduce: ''
+  auth_logout_invalidation:
+    test: Logout invalidation — old session tokens rejected after logout
+    status: not_tested
+    severity: null
+    evidence: ''
+    steps_to_reproduce: ''
+  auth_mfa_bypass:
+    test: Multi-factor auth bypass — MFA cannot be skipped via direct API call, back
+      button, or race condition
+    status: not_tested
+    severity: null
+    evidence: ''
+    steps_to_reproduce: ''
+access_control:
+  ac_horizontal_privesc:
+    test: Horizontal privilege escalation — User B cannot access/modify/delete User
+      A's object by ID
+    status: not_tested
+    severity: null
+    evidence: ''
+    steps_to_reproduce: ''
+  ac_id_predictability:
+    test: ID predictability — object IDs are non-sequential / non-enumerable
+    status: not_tested
+    severity: null
+    evidence: ''
+    steps_to_reproduce: ''
+  ac_vertical_privesc:
+    test: Vertical privilege escalation — standard user cannot reach admin-only endpoints
+      directly
+    status: not_tested
+    severity: null
+    evidence: ''
+    steps_to_reproduce: ''
+  ac_api_level_idor:
+    test: API-level IDOR — restrictions enforced server-side, not just in the UI
+    status: not_tested
+    severity: null
+    evidence: ''
+    steps_to_reproduce: ''
+  ac_mass_assignment:
+    test: Mass assignment — server rejects unexpected fields (role, permission flags,
+      verified status) in update requests
+    status: not_tested
+    severity: null
+    evidence: ''
+    steps_to_reproduce: ''
+business_logic:
+  bl_rate_quota_bypass:
+    test: Rate/quota bypass — usage limits enforced server-side, not client-side only
+    status: not_tested
+    severity: null
+    evidence: ''
+    steps_to_reproduce: ''
+  bl_input_boundary_abuse:
+    test: Input boundary abuse — negative/zero/oversized/malformed numeric values
+      rejected
+    status: not_tested
+    severity: null
+    evidence: ''
+    steps_to_reproduce: ''
+  bl_workflow_step_skipping:
+    test: Workflow step-skipping — later-stage endpoints reject calls that bypass
+      required earlier steps
+    status: not_tested
+    severity: null
+    evidence: ''
+    steps_to_reproduce: ''
+  bl_duplicate_replay:
+    test: Duplicate/replay submission — resubmission does not create duplicate records
+      or inconsistent state
+    status: not_tested
+    severity: null
+    evidence: ''
+    steps_to_reproduce: ''
+  bl_race_conditions:
+    test: Race conditions — concurrent requests against check-then-act logic cannot
+      bypass the check
+    status: not_tested
+    severity: null
+    evidence: ''
+    steps_to_reproduce: ''
+transaction_payment:
+  tx_price_tampering:
+    test: Price/amount tampering — client-supplied amount/quantity/price cannot be
+      modified in transit
+    status: not_tested
+    severity: null
+    evidence: ''
+    steps_to_reproduce: ''
+  tx_negative_invalid_values:
+    test: Negative/invalid values — negative quantities, mismatched currencies, decimal
+      precision abuse rejected
+    status: not_tested
+    severity: null
+    evidence: ''
+    steps_to_reproduce: ''
+  tx_idempotency:
+    test: Idempotency — replayed transaction confirmation does not cause double charge/credit
+    status: not_tested
+    severity: null
+    evidence: ''
+    steps_to_reproduce: ''
+  tx_discount_abuse:
+    test: Discount/coupon logic abuse — stacking, reuse, or manipulation of promo
+      codes prevented
+    status: not_tested
+    severity: null
+    evidence: ''
+    steps_to_reproduce: ''
+input_handling:
+  ih_file_upload:
+    test: File upload — double extensions, MIME spoofing, oversized files, path traversal
+      in filenames rejected
+    status: not_tested
+    severity: null
+    evidence: ''
+    steps_to_reproduce: ''
+  ih_error_verbosity:
+    test: Error message verbosity — no stack traces, DB errors, or internal paths
+      leaked in error responses
+    status: not_tested
+    severity: null
+    evidence: ''
+    steps_to_reproduce: ''
+  ih_open_redirect:
+    test: Open redirect — redirect parameters restricted to allow-listed destinations
+    status: not_tested
+    severity: null
+    evidence: ''
+    steps_to_reproduce: ''
+  ih_cors_misconfig:
+    test: CORS misconfiguration — Access-Control-Allow-Origin is not wildcard-with-credentials
+    status: not_tested
+    severity: null
+    evidence: ''
+    steps_to_reproduce: ''

@@ -1,0 +1,32 @@
+[
+  {
+    "severity": "High",
+    "title": "Insecure Direct Object Reference (IDOR) in User Profile API",
+    "category": "Access Control",
+    "description": "The /api/v1/users/{id}/profile endpoint does not verify that the authenticated user owns the requested profile. By changing the user ID parameter, an attacker can read or modify other users' profile data including email addresses, phone numbers, and account settings.",
+    "affected_component": "GET /api/v1/users/{id}/profile",
+    "proof_of_concept": "1. Authenticate as user A (id=1001)\n2. Send GET /api/v1/users/1002/profile with user A's session token\n3. The API returns user B's full profile data\n4. Send PUT /api/v1/users/1002/profile with modified email — change is accepted",
+    "recommendation": "Implement server-side authorisation checks to verify the authenticated user has permission to access the requested resource. Use the session/token identity rather than the URL parameter to determine data ownership.",
+    "business_impact": "Allows any authenticated user to access and modify other users' personal data, leading to potential data breach and privacy regulation violations."
+  },
+  {
+    "severity": "Medium",
+    "title": "Rate Limiting Bypass on Login Endpoint",
+    "category": "Authentication",
+    "description": "The /auth/login endpoint enforces rate limiting based on IP address only. By rotating through different X-Forwarded-For header values, an attacker can bypass the rate limit and perform brute-force password attacks.",
+    "affected_component": "POST /auth/login",
+    "proof_of_concept": "1. Send 5 failed login attempts from the same IP — rate limit triggers (429 response)\n2. Add X-Forwarded-For: 10.0.0.1 header — rate limit resets\n3. Repeat with incrementing X-Forwarded-For values to continue brute-forcing",
+    "recommendation": "Implement rate limiting based on the target account (username/email) in addition to source IP. Ignore or sanitise X-Forwarded-For headers unless from a trusted reverse proxy. Consider implementing account lockout after N failed attempts.",
+    "business_impact": "Enables brute-force attacks against user accounts, potentially leading to account takeover and unauthorised access to sensitive data."
+  },
+  {
+    "severity": "Low",
+    "title": "Verbose Error Messages in API Responses",
+    "category": "Information Disclosure",
+    "description": "Several API endpoints return detailed error messages including stack traces, database query fragments, and internal file paths when unexpected input is provided. This information aids attackers in understanding the application's internal structure.",
+    "affected_component": "Multiple API endpoints",
+    "proof_of_concept": "1. Send malformed JSON to POST /api/v1/orders\n2. Response includes: 'SqlException: Invalid column name ... at /app/src/OrderService.cs:142'",
+    "recommendation": "Implement a global error handler that returns generic error messages to clients. Log detailed error information server-side only. Ensure production configurations suppress stack traces and internal paths.",
+    "business_impact": ""
+  }
+]

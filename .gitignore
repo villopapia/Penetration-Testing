@@ -1,0 +1,6 @@
+﻿.env
+__pycache__/
+*.pyc
+.qodo/
+.claude/
+scan_audit.log
