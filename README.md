@@ -193,6 +193,88 @@ Prints the steps that *would* execute without contacting ZAP.
 | `--assessor-name` | Current user | Assessor name |
 | `--assessment-date` | Today | Assessment date (ISO format) |
 
+## Custom Security Modules
+
+Beyond the ZAP scan, the toolkit includes Python-based security modules that run independently or alongside ZAP:
+
+| Module | Description | Active? |
+|--------|-------------|---------|
+| `auth` | Login discovery, cleartext checks, password policy, default creds, brute-force | Yes |
+| `supply-chain` | JS library CVE lookup, SRI validation, manifest probing | No |
+| `prompt-injection` | LLM/chatbot detection, prompt injection, system prompt leakage | Yes |
+| `ransomware` | Admin panels, security headers, directory listing, exposed files, port scan | Yes (network) |
+| `authenticated-scan` | Login + authenticated crawl + IDOR/ACL probes | Yes |
+| `tls` | Certificate validation, protocol versions, cipher suites, HSTS | No |
+| `api-discovery` | OpenAPI/Swagger spec discovery, JS endpoint extraction, GraphQL introspection | No |
+
+### Running modules standalone
+
+```bash
+python run_modules.py --target https://staging.example.com --modules auth,tls,api-discovery
+```
+
+### Running with ZAP (full assessment)
+
+```bash
+python assess.py \
+  --target https://staging.example.com \
+  --entity-name "Example Corp" \
+  --entity-lei "529900EXAMPLE" \
+  --assessor-name "Security Team" \
+  --api-key YOUR_KEY \
+  --custom-modules auth supply-chain tls api-discovery
+```
+
+### Authenticated scanning
+
+```bash
+python run_modules.py --target https://example.com \
+  --modules authenticated-scan \
+  --session-cookie "sessionid=abc123" \
+  --max-pages 100 \
+  --confirm
+```
+
+Or with login credentials (password via `AUTH_PASSWORD` env var):
+
+```bash
+AUTH_PASSWORD=secret python run_modules.py --target https://example.com \
+  --modules authenticated-scan \
+  --auth-login-url /login \
+  --auth-username admin \
+  --probe-access-control \
+  --confirm
+```
+
+### Headless browser rendering (optional)
+
+Some modules support `--use-browser` for JavaScript-heavy SPA targets. Requires Playwright:
+
+```bash
+pip install playwright
+playwright install chromium
+```
+
+Then add `--use-browser` to auth, supply-chain, or prompt-injection modules.
+
+### API discovery integration
+
+Add `--use-api-discovery` to the prompt-injection module to feed discovered API endpoints into LLM detection:
+
+```bash
+python run_modules.py --target https://example.com \
+  --modules prompt-injection \
+  --use-api-discovery \
+  --confirm
+```
+
+### Known Limitations
+
+- Authenticated crawling does not render JavaScript (no headless browser in the crawler).
+- TLS cipher testing is limited to the negotiated cipher; full cipher enumeration requires OpenSSL CLI.
+- X.509 certificate extension parsing is limited to stdlib `ssl` capabilities; advanced checks need the `cryptography` package.
+- GraphQL mutation fuzzing is not performed — only introspection detection.
+
 ## Audit log
 
 Every scan start and end is logged to `scan_audit.log` in the working directory with timestamps, target, scan type, and the OS user who ran it.

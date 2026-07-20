@@ -105,6 +105,39 @@ _LEAKAGE_INDICATORS: list[str] = [
 # Detection: LLM feature discovery (passive)
 # ---------------------------------------------------------------------------
 
+def _match_signatures_in_html(
+    html: str,
+    headers: dict[str, str],
+    sigs: dict[str, list[str]],
+    add_fn: Any,
+    target_url: str,
+) -> None:
+    """Match widget/chatbot signatures against HTML and headers."""
+    body_lower = html.lower()
+
+    for pattern in sigs.get("widget_scripts", []):
+        if pattern.lower() in body_lower:
+            add_fn("widget", target_url, f"Script reference: {pattern}")
+
+    for selector in sigs.get("dom_selectors", []):
+        regex = _selector_to_regex(selector)
+        if regex and re.search(regex, html, re.IGNORECASE):
+            add_fn("chatbot", target_url, f"DOM element matching: {selector}")
+
+    for text_pat in sigs.get("text_patterns", []):
+        if text_pat.lower() in body_lower:
+            add_fn("chatbot", target_url, f"Text pattern: {text_pat}")
+
+    for meta_ind in sigs.get("meta_indicators", []):
+        if meta_ind.lower() in body_lower:
+            add_fn("chatbot", target_url, f"Meta indicator: {meta_ind}")
+
+    for hdr_name in sigs.get("response_headers", []):
+        if hdr_name.lower() in {k.lower() for k in headers}:
+            hdr_val = headers.get(hdr_name, "")
+            add_fn("chatbot", target_url, f"Response header: {hdr_name}={hdr_val}")
+
+
 def detect_llm_features(
     session: Any,
     target: str,
@@ -132,34 +165,8 @@ def detect_llm_features(
 
     body = resp.text
     headers = resp.headers
-    body_lower = body.lower()
 
-    # Widget script detection
-    for pattern in sigs.get("widget_scripts", []):
-        if pattern.lower() in body_lower:
-            _add("widget", target, f"Script reference: {pattern}")
-
-    # DOM marker detection via regex (we don't have a live DOM, so pattern-match HTML)
-    for selector in sigs.get("dom_selectors", []):
-        # Convert simple CSS selectors to regex patterns
-        regex = _selector_to_regex(selector)
-        if regex and re.search(regex, body, re.IGNORECASE):
-            _add("chatbot", target, f"DOM element matching: {selector}")
-
-    # Text pattern detection
-    for text_pat in sigs.get("text_patterns", []):
-        if text_pat.lower() in body_lower:
-            _add("chatbot", target, f"Text pattern: {text_pat}")
-
-    # Meta tag / header detection
-    for meta_ind in sigs.get("meta_indicators", []):
-        if meta_ind.lower() in body_lower:
-            _add("chatbot", target, f"Meta indicator: {meta_ind}")
-
-    for hdr_name in sigs.get("response_headers", []):
-        if hdr_name.lower() in {k.lower() for k in headers}:
-            hdr_val = headers.get(hdr_name, "")
-            _add("chatbot", target, f"Response header: {hdr_name}={hdr_val}")
+    _match_signatures_in_html(body, dict(headers), sigs, _add, target)
 
     # -- Probe common API endpoints --
     for api_path in sigs.get("api_paths", []):
@@ -179,6 +186,41 @@ def detect_llm_features(
                     _add("api", endpoint_url, f"GET returned {probe.status_code} ({content_type})")
         except Exception:
             pass
+
+    return features
+
+
+def detect_llm_features_via_browser(
+    target: str,
+    sigs: dict[str, list[str]],
+) -> list[dict[str, str]]:
+    """Render target with BrowserSession and detect widget scripts/chat UI."""
+    from modules.browser_render import BrowserSession, BrowserUnavailableError
+
+    features: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    def _add(feat_type: str, url: str, evidence: str) -> None:
+        key = (feat_type, url, evidence)
+        if key not in seen:
+            seen.add(key)
+            features.append({"type": feat_type, "url": url, "evidence": evidence})
+
+    try:
+        with BrowserSession() as browser:
+            rendered = browser.render(
+                target,
+                wait_until="networkidle",
+                extra_wait_ms=2000,
+            )
+            _match_signatures_in_html(rendered.html, {}, sigs, _add, target)
+
+            for req_url in rendered.requests:
+                for pattern in sigs.get("widget_scripts", []):
+                    if pattern.lower() in req_url.lower():
+                        _add("widget", target, f"Browser network request: {req_url}")
+    except BrowserUnavailableError as exc:
+        logger.warning("Browser rendering failed: %s", exc)
 
     return features
 
@@ -369,24 +411,88 @@ def _looks_like_system_prompt(text: str) -> bool:
 # Payload delivery helper
 # ---------------------------------------------------------------------------
 
+def _build_payload_from_schema(
+    schema: dict[str, Any] | None, message: str,
+) -> dict[str, Any] | None:
+    """Inspect an OpenAPI requestBody schema to build a correctly-shaped payload."""
+    if not schema or not isinstance(schema, dict):
+        return None
+
+    properties = schema.get("properties", {})
+    if not isinstance(properties, dict):
+        return None
+
+    payload: dict[str, Any] = {}
+    message_placed = False
+
+    for prop_name, prop_def in properties.items():
+        if not isinstance(prop_def, dict):
+            continue
+        prop_type = prop_def.get("type", "string")
+
+        name_lower = prop_name.lower()
+        is_message_field = any(
+            kw in name_lower
+            for kw in ("message", "prompt", "query", "input", "text", "content", "question")
+        )
+
+        if is_message_field and not message_placed:
+            if prop_type == "array":
+                items = prop_def.get("items", {})
+                if isinstance(items, dict) and items.get("type") == "object":
+                    payload[prop_name] = [{"role": "user", "content": message}]
+                else:
+                    payload[prop_name] = [message]
+            else:
+                payload[prop_name] = message
+            message_placed = True
+        elif prop_type == "string":
+            payload[prop_name] = prop_def.get("default", "")
+        elif prop_type == "integer":
+            payload[prop_name] = prop_def.get("default", 0)
+        elif prop_type == "boolean":
+            payload[prop_name] = prop_def.get("default", False)
+        elif prop_type == "array":
+            payload[prop_name] = []
+        elif prop_type == "object":
+            payload[prop_name] = {}
+
+    if not message_placed:
+        return None
+
+    return payload
+
+
 def _send_chat_payload(
     session: Any,
     url: str,
     message: str,
     timeout: int,
+    schema_hint: dict[str, Any] | None = None,
 ) -> str | None:
     """Try multiple common request formats to send *message* to *url*.
 
+    If *schema_hint* is provided (from OpenAPI discovery), try the
+    schema-derived payload first before falling back to blind formats.
+
     Returns the response body text, or ``None`` on failure.
     """
-    json_bodies = [
+    json_bodies: list[dict[str, Any]] = []
+
+    # Schema-derived payload gets priority
+    schema_payload = _build_payload_from_schema(schema_hint, message)
+    if schema_payload:
+        json_bodies.append(schema_payload)
+
+    json_bodies.extend([
         {"message": message},
         {"messages": [{"role": "user", "content": message}]},
         {"query": message},
         {"prompt": message},
         {"input": message},
         {"text": message},
-    ]
+    ])
+
     for body in json_bodies:
         try:
             resp = session.post(
@@ -413,6 +519,9 @@ def run_scan(
     chat_endpoint: str | None = None,
     timeout: int = 20,
     dry_run: bool = False,
+    use_browser: bool = False,
+    session_override: Any | None = None,
+    use_api_discovery: bool = False,
 ) -> list[dict[str, Any]]:
     """Run the prompt injection assessment against *target*.
 
@@ -446,12 +555,52 @@ def run_scan(
         _print_dry_run_info(target, confirm, chat_endpoint, timeout)
         return alerts
 
-    session = get_session()
+    session = session_override or get_session()
 
     # -- Step 1: passive detection (always runs) --
     print(f"\n[*] Detecting LLM/AI features on {target} ...")
     audit_log("LLM_DETECTION_START", target, "prompt_injection")
     features = detect_llm_features(session, target, timeout=timeout)
+
+    # -- Step 1b: Browser-based detection (optional) --
+    if use_browser:
+        from modules.browser_render import is_playwright_available
+        if is_playwright_available():
+            sigs = _load_signatures()
+            browser_features = detect_llm_features_via_browser(target, sigs)
+            existing = {(f["type"], f["url"], f["evidence"]) for f in features}
+            for bf in browser_features:
+                key = (bf["type"], bf["url"], bf["evidence"])
+                if key not in existing:
+                    existing.add(key)
+                    features.append(bf)
+        else:
+            print(
+                "[prompt_injection] --use-browser requested but Playwright is "
+                "not installed; skipping browser-based detection."
+            )
+
+    # API discovery integration
+    if use_api_discovery:
+        try:
+            from modules.api_discovery import get_discovered_endpoints
+            print("[*] Running API discovery for LLM endpoint identification ...")
+            discovered = get_discovered_endpoints(
+                target, timeout=timeout, session_override=session,
+            )
+            for ep in discovered:
+                path = ep.get("path", "")
+                path_lower = path.lower()
+                if any(kw in path_lower for kw in ("chat", "ai", "llm", "prompt", "ask", "complete", "generate")):
+                    ep_url = urljoin(target.rstrip("/") + "/", path.lstrip("/"))
+                    features.append({
+                        "type": "api",
+                        "url": ep_url,
+                        "evidence": f"API discovery ({ep.get('source', 'unknown')}): {ep.get('method', 'POST')} {path}",
+                    })
+            print(f"    API discovery contributed {len(discovered)} endpoint(s)")
+        except ImportError:
+            print("[prompt_injection] api_discovery module not available; skipping.")
 
     # Add explicit endpoint if provided
     if chat_endpoint:
@@ -609,6 +758,16 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Show planned actions without sending any requests.",
     )
+    p.add_argument(
+        "--use-browser",
+        action="store_true",
+        help="Use Playwright for JS-rendered chat widget detection.",
+    )
+    p.add_argument(
+        "--use-api-discovery",
+        action="store_true",
+        help="Use api_discovery module to find chat API endpoints.",
+    )
     return p
 
 
@@ -622,6 +781,8 @@ def main() -> None:
         chat_endpoint=args.chat_endpoint,
         timeout=args.timeout,
         dry_run=args.dry_run,
+        use_browser=args.use_browser,
+        use_api_discovery=args.use_api_discovery,
     )
 
     if alerts:

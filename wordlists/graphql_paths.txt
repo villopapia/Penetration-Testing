@@ -1,0 +1,7 @@
+# Common GraphQL endpoint paths
+/graphql
+/graphql/
+/api/graphql
+/v1/graphql
+/gql
+/query

@@ -8,6 +8,7 @@ import logging
 import pathlib
 import sys
 import time
+import warnings
 from typing import Any
 from urllib.parse import urlparse
 
@@ -137,3 +138,113 @@ def resolve_url(base_url: str, href: str) -> str:
     from urllib.parse import urljoin
 
     return urljoin(base_url, href)
+
+
+def extract_form_fields(form_element: Any) -> list[dict[str, str]]:
+    """Extract input fields from a bs4 form element."""
+    fields: list[dict[str, str]] = []
+    for inp in form_element.find_all("input"):
+        name = inp.get("name", "")
+        if not name:
+            continue
+        fields.append({
+            "name": name,
+            "type": inp.get("type", "text").lower(),
+            "value": inp.get("value", ""),
+        })
+    return fields
+
+
+def extract_meta_csrf_token(html: str) -> str | None:
+    """Look for <meta name="csrf-token" content="..."> or similar."""
+    import re
+    soup = parse_html(html)
+    for meta in soup.find_all("meta"):
+        name = (meta.get("name") or "").lower()
+        if name in ("csrf-token", "csrf-param", "csrf_token", "_token"):
+            content = meta.get("content", "")
+            if content:
+                return content
+    return None
+
+
+def find_matching_form(
+    html: str, page_url: str, action_url: str, method: str
+) -> Any | None:
+    """Parse html, return the bs4 <form> element whose resolved action
+    equals action_url and whose method matches."""
+    soup = parse_html(html)
+    for form in soup.find_all("form"):
+        form_action = resolve_url(page_url, form.get("action", ""))
+        form_method = (form.get("method", "POST")).upper()
+        if form_action == action_url and form_method == method.upper():
+            return form
+    return None
+
+
+def refresh_form_fields(
+    session: Any,
+    page_url: str,
+    action_url: str,
+    method: str,
+    timeout: int = 15,
+) -> tuple[list[dict[str, str]] | None, str | None]:
+    """Re-GET page_url, locate the matching form, return (fresh_fields, meta_csrf_token)."""
+    resp, err = fetch_page(session, page_url, timeout=timeout)
+    if resp is None:
+        return None, None
+
+    form = find_matching_form(resp.text, page_url, action_url, method)
+    if form is None:
+        return None, None
+
+    fields = extract_form_fields(form)
+    meta_token = extract_meta_csrf_token(resp.text)
+    return fields, meta_token
+
+
+def load_lines(path: pathlib.Path) -> list[str]:
+    """Read non-empty, non-comment lines from a text file."""
+    if not path.is_file():
+        warnings.warn(f"Wordlist not found: {path}")
+        return []
+    lines: list[str] = []
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        stripped = raw.strip()
+        if stripped and not stripped.startswith("#"):
+            lines.append(stripped)
+    return lines
+
+
+def extract_script_sources(html: str, base_url: str) -> list[dict[str, Any]]:
+    """Parse <script src> and <link href> tags, returning structured info."""
+    from urllib.parse import urljoin
+    soup = parse_html(html)
+    resources: list[dict[str, Any]] = []
+
+    for tag in soup.find_all("script", src=True):
+        src = tag["src"]
+        absolute = resolve_url(base_url, src)
+        resources.append({
+            "tag": "script",
+            "src": absolute,
+            "raw_src": src,
+            "integrity": tag.get("integrity", ""),
+            "crossorigin": tag.get("crossorigin", ""),
+        })
+
+    for tag in soup.find_all("link", href=True):
+        rel = " ".join(tag.get("rel", []))
+        if "stylesheet" not in rel:
+            continue
+        href = tag["href"]
+        absolute = resolve_url(base_url, href)
+        resources.append({
+            "tag": "link",
+            "src": absolute,
+            "raw_src": href,
+            "integrity": tag.get("integrity", ""),
+            "crossorigin": tag.get("crossorigin", ""),
+        })
+
+    return resources

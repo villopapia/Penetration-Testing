@@ -513,6 +513,13 @@ _DORA_KEYWORD_MAP: list[tuple[tuple[str, ...], str]] = [
     (("sub resource integrity", "subresource integrity", "sri",
       "missing subresource integrity"), "24_1_b"),
     (("cache control", "cache-control", "caching"), "24_1_a"),
+    (("tls", "ssl", "certificate", "cipher", "hsts", "strict-transport",
+      "deprecated tls", "weak cipher", "self-signed", "expired tls",
+      "hostname mismatch", "protocol version"), "24_1_a"),
+    (("broken access control", "idor", "insecure direct object",
+      "unauthorized access", "without authentication"), "24_1_a"),
+    (("openapi", "swagger", "api specification", "api endpoint",
+      "graphql", "introspection", "api discovery"), "24_1_a"),
 ]
 _DORA_DEFAULT = "24_1_a"
 

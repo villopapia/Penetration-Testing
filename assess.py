@@ -122,7 +122,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--custom-modules",
         nargs="*",
         default=None,
-        choices=["auth", "supply-chain", "prompt-injection", "ransomware", "all"],
+        choices=["auth", "supply-chain", "prompt-injection", "ransomware", "authenticated-scan", "tls", "api-discovery", "all"],
         help="Run custom Python security modules alongside the ZAP scan",
     )
     p.add_argument(

@@ -25,6 +25,10 @@ from modules.common import (
     print_dry_run,
     fetch_page,
     parse_html,
+    extract_form_fields,
+    refresh_form_fields,
+    extract_meta_csrf_token,
+    load_lines,
 )
 
 logger = logging.getLogger(__name__)
@@ -59,22 +63,22 @@ _LOCKOUT_INDICATORS = (
 _PASSWORD_FIELD_NAMES = ("password", "passwd", "pass", "pwd", "secret")
 _USERNAME_FIELD_NAMES = ("username", "user", "login", "email", "userid", "user_id", "account")
 
+_SPA_SHELL_MARKERS = (
+    'id="root"', 'id="app"', 'ng-version', 'data-reactroot',
+    '__next', 'data-server-rendered', 'ng-app',
+)
+
+
+def _looks_like_spa_shell(html: str) -> bool:
+    lower = html.lower()
+    return '<form' not in lower and any(m.lower() in lower for m in _SPA_SHELL_MARKERS)
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _load_lines(path: pathlib.Path) -> list[str]:
-    """Read non-empty, non-comment lines from a text file."""
-    if not path.is_file():
-        warnings.warn(f"Wordlist not found: {path}")
-        return []
-    lines: list[str] = []
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        stripped = raw.strip()
-        if stripped and not stripped.startswith("#"):
-            lines.append(stripped)
-    return lines
+_load_lines = load_lines
 
 
 def _normalise_url(base: str, action: str) -> str:
@@ -95,18 +99,8 @@ def _has_password_field(form_element: Any) -> bool:
 
 
 def _extract_form_fields(form_element: Any) -> list[dict[str, str]]:
-    """Extract input fields from a form element."""
-    fields: list[dict[str, str]] = []
-    for inp in form_element.find_all("input"):
-        name = inp.get("name", "")
-        if not name:
-            continue
-        fields.append({
-            "name": name,
-            "type": inp.get("type", "text").lower(),
-            "value": inp.get("value", ""),
-        })
-    return fields
+    """Extract input fields from a form element. Delegates to common."""
+    return extract_form_fields(form_element)
 
 
 def _identify_field(fields: list[dict[str, str]], candidates: tuple[str, ...], field_type: str | None = None) -> str | None:
@@ -159,17 +153,22 @@ def discover_login_endpoints(
     target: str,
     login_paths_file: pathlib.Path | None = None,
     timeout: int = 15,
+    *,
+    use_browser: bool = False,
 ) -> list[dict[str, Any]]:
     """Find login forms on the target.
 
     Returns a list of dicts: {"url", "method", "action", "fields",
     "username_field", "password_field"}.
     """
+    from modules.browser_render import is_playwright_available, BrowserUnavailableError
+
     paths_file = login_paths_file or _DEFAULT_LOGIN_PATHS
     candidate_paths = _load_lines(paths_file)
 
     endpoints: list[dict[str, Any]] = []
     seen_urls: set[str] = set()
+    spa_candidates: list[tuple[str, str]] = []
 
     def _process_page(url: str, resp_text: str) -> None:
         soup = parse_html(resp_text)
@@ -208,16 +207,124 @@ def discover_login_endpoints(
             continue
         if resp.status_code in (200, 301, 302, 303, 307, 308):
             _process_page(url, resp.text)
+            if use_browser and _looks_like_spa_shell(resp.text):
+                spa_candidates.append((url, resp.text))
 
     # Also parse the target root page for login forms
     resp, err = fetch_page(session, target, timeout=timeout)
     if resp is not None and resp.status_code == 200:
         _process_page(target, resp.text)
+        if use_browser and _looks_like_spa_shell(resp.text):
+            spa_candidates.append((target, resp.text))
+
+    # Browser-based rendering for SPA shells
+    if use_browser and spa_candidates:
+        if not is_playwright_available():
+            print(
+                "[auth_test] --use-browser requested but Playwright is not "
+                "installed/configured; falling back to static HTML discovery. "
+                "Run: pip install playwright && playwright install chromium"
+            )
+        else:
+            try:
+                from modules.browser_render import BrowserSession
+                with BrowserSession() as browser:
+                    for url, _ in spa_candidates:
+                        rendered = browser.render(
+                            url,
+                            wait_for_selector="input[type=password]",
+                        )
+                        _process_page(url, rendered.html)
+            except BrowserUnavailableError as exc:
+                print(f"[auth_test] Browser rendering failed: {exc}")
+    elif use_browser and not endpoints:
+        if is_playwright_available():
+            try:
+                from modules.browser_render import BrowserSession
+                with BrowserSession() as browser:
+                    rendered = browser.render(
+                        target,
+                        wait_for_selector="input[type=password]",
+                    )
+                    _process_page(target, rendered.html)
+            except BrowserUnavailableError as exc:
+                print(f"[auth_test] Browser rendering failed: {exc}")
+        else:
+            print(
+                "[auth_test] --use-browser requested but Playwright is not "
+                "installed/configured; falling back to static HTML discovery. "
+                "Run: pip install playwright && playwright install chromium"
+            )
 
     audit_log("LOGIN_DISCOVERY", target, "auth_test", extra=f"endpoints={len(endpoints)}")
     for ep in endpoints:
         logger.info("  Login form: %s -> %s [%s]", ep["url"], ep["action"], ep["method"])
     return endpoints
+
+
+_CSRF_FIELD_RE = re.compile(r"csrf|token|_token|authenticity", re.I)
+
+
+# ---------------------------------------------------------------------------
+# Check 1b: CSRF Token Rotation (passive)
+# ---------------------------------------------------------------------------
+
+def check_csrf_protection(
+    session: Any,
+    endpoints: list[dict[str, Any]],
+    timeout: int = 15,
+) -> list[dict[str, Any]]:
+    """Check whether CSRF tokens rotate between fetches (passive, no --confirm)."""
+    alerts: list[dict[str, Any]] = []
+    for ep in endpoints:
+        page_url = ep["url"]
+        resp1, err1 = fetch_page(session, page_url, timeout=timeout)
+        if resp1 is None:
+            continue
+
+        time.sleep(2)
+        resp2, err2 = fetch_page(session, page_url, timeout=timeout)
+        if resp2 is None:
+            continue
+
+        soup1 = parse_html(resp1.text)
+        soup2 = parse_html(resp2.text)
+
+        for form1 in soup1.find_all("form"):
+            for inp in form1.find_all("input", attrs={"type": "hidden"}):
+                name = inp.get("name", "")
+                if not _CSRF_FIELD_RE.search(name):
+                    continue
+                val1 = inp.get("value", "")
+                if not val1:
+                    continue
+                val2 = None
+                for form2 in soup2.find_all("form"):
+                    inp2 = form2.find("input", attrs={"name": name, "type": "hidden"})
+                    if inp2:
+                        val2 = inp2.get("value", "")
+                        break
+                if val2 is not None and val1 == val2:
+                    alerts.append(make_alert(
+                        risk="Informational",
+                        alert_name="Static/Non-Rotating CSRF Token Detected",
+                        url=page_url,
+                        description=(
+                            f"The CSRF token field '{name}' at {page_url} returned "
+                            f"identical values across two separate requests. Non-rotating "
+                            f"tokens are weaker against replay and fixation attacks."
+                        ),
+                        solution=(
+                            "Implement per-request CSRF token rotation. Each form "
+                            "render should produce a unique, unpredictable token "
+                            "that is validated and consumed server-side."
+                        ),
+                        cweid="352",
+                        reference="https://cwe.mitre.org/data/definitions/352.html",
+                    ))
+                    break
+            break
+    return alerts
 
 
 # ---------------------------------------------------------------------------
@@ -607,13 +714,21 @@ def run_scan(
     test_username: str | None = None,
     timeout: int = 15,
     dry_run: bool = False,
+    use_browser: bool = False,
+    csrf_aware: bool = True,
+    session_override: Any | None = None,
 ) -> list[dict[str, Any]]:
     """Run the authentication test suite. Returns alerts in zap_scan format."""
     if dry_run:
         checks = [
             "Login endpoint discovery (passive)",
             "Cleartext login check (passive)",
+            "CSRF token rotation check (passive)",
         ]
+        if use_browser:
+            checks.append("JS-rendered login discovery (Playwright)")
+        if csrf_aware and confirm:
+            checks.append("CSRF token refresh before each active submission (csrf_aware=True)")
         if confirm:
             checks.extend([
                 "Password policy probe (active)",
@@ -631,19 +746,17 @@ def run_scan(
         return []
 
     attempts = min(attempts, _MAX_ATTEMPTS_CAP)
-    session = get_session()
+    session = session_override or get_session()
     all_alerts: list[dict[str, Any]] = []
 
     # Override login paths file if a single path was given via CLI
     login_paths_file = None
     if login_path:
-        # Write a temporary single-entry paths file is overkill;
-        # just inject the endpoint directly after discovery
         pass
 
     # --- Passive checks (always run) ---
     print(f"[auth_test] Discovering login endpoints on {target} ...")
-    endpoints = discover_login_endpoints(session, target, timeout=timeout)
+    endpoints = discover_login_endpoints(session, target, timeout=timeout, use_browser=use_browser)
 
     # If --login-path was given, also probe that specific path
     if login_path:
@@ -681,6 +794,9 @@ def run_scan(
 
     print("[auth_test] Checking for cleartext HTTP login ...")
     all_alerts.extend(check_cleartext_login(endpoints))
+
+    print("[auth_test] Checking CSRF token rotation ...")
+    all_alerts.extend(check_csrf_protection(session, endpoints, timeout=timeout))
 
     # --- Active checks (require --confirm) ---
     if not confirm:
@@ -741,6 +857,9 @@ def _build_cli_parser() -> argparse.ArgumentParser:
     p.add_argument("--test-username", default=None, help="Username for brute-force test (default: auto-generated)")
     p.add_argument("--timeout", type=int, default=15, help="HTTP request timeout in seconds (default: 15)")
     p.add_argument("--dry-run", action="store_true", help="Show what would run without making requests")
+    p.add_argument("--use-browser", action="store_true", help="Use Playwright for JS-rendered login discovery")
+    p.add_argument("--no-csrf-aware", action="store_false", dest="csrf_aware",
+                   help="Disable CSRF token refresh before each active submission")
     return p
 
 
@@ -761,6 +880,8 @@ def main() -> None:
         test_username=args.test_username,
         timeout=args.timeout,
         dry_run=args.dry_run,
+        use_browser=args.use_browser,
+        csrf_aware=args.csrf_aware,
     )
 
     if alerts:

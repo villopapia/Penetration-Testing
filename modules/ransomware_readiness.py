@@ -730,6 +730,7 @@ def run_scan(
     check_admin_paths: bool = True,
     timeout: int = 10,
     dry_run: bool = False,
+    session_override: Any | None = None,
 ) -> list[dict[str, Any]]:
     """Main entry point. Returns alerts in zap_scan format."""
     target = target.rstrip("/")
@@ -757,7 +758,7 @@ def run_scan(
         return []
 
     audit_log("RANSOMWARE_SCAN_START", target, "ransomware_readiness")
-    session = get_session(timeout=timeout)
+    session = session_override or get_session(timeout=timeout)
     all_alerts: list[dict[str, Any]] = []
 
     if check_admin_paths:

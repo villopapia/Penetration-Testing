@@ -30,6 +30,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 from modules.common import (
     audit_log,
+    extract_script_sources,
     fetch_page,
     get_session,
     is_same_origin,
@@ -136,36 +137,7 @@ def _is_cache_fresh(entry: dict[str, Any]) -> bool:
 # 1. JS Library Discovery
 # ---------------------------------------------------------------------------
 
-def _extract_script_sources(html: str, base_url: str) -> list[dict[str, Any]]:
-    """Parse <script src> and <link href> tags, returning structured info."""
-    soup = parse_html(html)
-    resources: list[dict[str, Any]] = []
-
-    for tag in soup.find_all("script", src=True):
-        src = tag["src"]
-        absolute = resolve_url(base_url, src)
-        resources.append({
-            "tag": "script",
-            "src": absolute,
-            "raw_src": src,
-            "integrity": tag.get("integrity", ""),
-            "crossorigin": tag.get("crossorigin", ""),
-        })
-
-    for tag in soup.find_all("link", href=True):
-        rel = " ".join(tag.get("rel", []))
-        if "stylesheet" in rel:
-            href = tag["href"]
-            absolute = resolve_url(base_url, href)
-            resources.append({
-                "tag": "link",
-                "src": absolute,
-                "raw_src": href,
-                "integrity": tag.get("integrity", ""),
-                "crossorigin": tag.get("crossorigin", ""),
-            })
-
-    return resources
+_extract_script_sources = extract_script_sources
 
 
 def _identify_from_url(src: str, signatures: dict[str, Any]) -> tuple[str, str] | None:
@@ -396,6 +368,36 @@ def check_manifests(
 # Main scan entry point
 # ---------------------------------------------------------------------------
 
+def discover_libraries_via_browser(
+    base_url: str,
+    signatures: dict[str, Any],
+    *,
+    timeout_ms: int = 30000,
+) -> list[dict[str, Any]]:
+    """Render base_url with BrowserSession, discover libraries from network requests."""
+    from modules.browser_render import BrowserSession, BrowserUnavailableError
+
+    found: list[dict[str, Any]] = []
+    try:
+        with BrowserSession(nav_timeout_ms=timeout_ms) as browser:
+            rendered = browser.render(base_url, wait_until="networkidle")
+            for req_url in rendered.requests:
+                ident = _identify_from_url(req_url, signatures)
+                if ident:
+                    found.append({
+                        "name": ident[0],
+                        "version": ident[1],
+                        "src": req_url,
+                        "method": "browser_network",
+                        "package_name": signatures[ident[0]].get("package_name", ident[0].lower()),
+                        "ecosystem": signatures[ident[0]].get("ecosystem", "npm"),
+                    })
+    except BrowserUnavailableError as exc:
+        logger.warning("Browser rendering failed: %s", exc)
+
+    return found
+
+
 def run_scan(
     target: str,
     *,
@@ -403,6 +405,8 @@ def run_scan(
     check_manifests_flag: bool = False,
     timeout: int = 15,
     verify_tls: bool = True,
+    use_browser: bool = False,
+    session_override: requests.Session | None = None,
 ) -> list[dict[str, Any]]:
     """Run the supply-chain checker against *target*.
 
@@ -413,6 +417,8 @@ def run_scan(
         "CVE lookup for discovered libraries via OSV.dev",
         "Subresource Integrity (SRI) validation on cross-origin resources",
     ]
+    if use_browser:
+        checks.append("Browser-based dynamic script discovery (Playwright)")
     if check_manifests_flag:
         checks.append("Exposed package manifest probing")
 
@@ -427,7 +433,7 @@ def run_scan(
 
     audit_log("START", target, "supply_chain")
     alerts: list[dict[str, Any]] = []
-    session = get_session(timeout=timeout, verify_tls=verify_tls)
+    session = session_override or get_session(timeout=timeout, verify_tls=verify_tls)
 
     # -- Fetch the target page --
     resp, err = fetch_page(session, target, timeout=timeout)
@@ -441,6 +447,24 @@ def run_scan(
 
     # -- 1. Discover libraries --
     libraries = discover_libraries(session, target, html, signatures, timeout=timeout)
+
+    # -- 1b. Browser-based discovery (optional) --
+    if use_browser:
+        from modules.browser_render import is_playwright_available
+        if is_playwright_available():
+            browser_libs = discover_libraries_via_browser(target, signatures)
+            seen = {f"{lib['name']}@{lib['version']}" for lib in libraries}
+            for lib in browser_libs:
+                key = f"{lib['name']}@{lib['version']}"
+                if key not in seen:
+                    seen.add(key)
+                    libraries.append(lib)
+        else:
+            print(
+                "[supply_chain] --use-browser requested but Playwright is not "
+                "installed/configured; skipping browser-based discovery."
+            )
+
     logger.info("Discovered %d JS libraries on %s", len(libraries), target)
 
     # -- 2. CVE lookup for each library --
@@ -587,6 +611,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Write JSON alerts to this file",
     )
+    p.add_argument(
+        "--use-browser",
+        action="store_true",
+        help="Use Playwright for JS-rendered script discovery",
+    )
     return p
 
 
@@ -605,6 +634,7 @@ def main() -> None:
         check_manifests_flag=args.check_manifests,
         timeout=args.timeout,
         verify_tls=not args.no_verify_tls,
+        use_browser=args.use_browser,
     )
 
     if not alerts:

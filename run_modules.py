@@ -25,6 +25,9 @@ except ImportError:
 
 from modules.common import audit_log, interactive_confirm
 from modules import auth_test, supply_chain, prompt_injection, ransomware_readiness
+from modules import authenticated_scan
+from modules import tls_check
+from modules import api_discovery
 
 from zap_scan import (
     _parse_alerts,
@@ -38,9 +41,9 @@ from zap_scan import (
 # Module registry
 # ---------------------------------------------------------------------------
 
-ALL_MODULES = ("auth", "supply-chain", "prompt-injection", "ransomware")
+ALL_MODULES = ("auth", "supply-chain", "prompt-injection", "ransomware", "authenticated-scan", "tls", "api-discovery")
 
-_ACTIVE_MODULES = {"auth", "prompt-injection"}
+_ACTIVE_MODULES = {"auth", "prompt-injection", "authenticated-scan"}
 
 
 def _run_module(
@@ -85,6 +88,32 @@ def _run_module(
             confirm=confirm,
             network_scan=extra_args.get("network_scan", False),
             network_ports=extra_args.get("network_ports"),
+            timeout=timeout,
+            dry_run=dry_run,
+        )
+    elif name == "authenticated-scan":
+        return authenticated_scan.run_scan(
+            target,
+            login_url=extra_args.get("auth_login_url"),
+            username=extra_args.get("auth_username"),
+            password=extra_args.get("auth_password"),
+            session_cookie=extra_args.get("session_cookie"),
+            auth_header=extra_args.get("auth_header"),
+            max_pages=extra_args.get("max_pages", 50),
+            probe_access_control=extra_args.get("probe_access_control", False),
+            confirm=confirm,
+            timeout=timeout,
+            dry_run=dry_run,
+        )
+    elif name == "tls":
+        return tls_check.run_scan(
+            target,
+            timeout=timeout,
+            dry_run=dry_run,
+        )
+    elif name == "api-discovery":
+        return api_discovery.run_scan(
+            target,
             timeout=timeout,
             dry_run=dry_run,
         )
@@ -207,6 +236,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--check-manifests", action="store_true", help="Enable manifest probing in supply-chain module")
     p.add_argument("--chat-endpoint", default=None, help="Explicit chat endpoint for prompt injection module")
     p.add_argument("--network-scan", action="store_true", help="Enable network port scan in ransomware module")
+    # Authenticated-scan flags
+    p.add_argument("--auth-login-url", default=None, help="Login page path for authenticated scanning")
+    p.add_argument("--auth-username", default=None, help="Username for authenticated scanning")
+    p.add_argument("--auth-password", default=None,
+                   help="Password for authenticated scanning login. Prefer AUTH_PASSWORD env var.")
+    p.add_argument("--session-cookie", default=None, help="Pre-authenticated session cookie (name=value)")
+    p.add_argument("--auth-header", default=None, help="Auth header (Header-Name: value)")
+    p.add_argument("--max-pages", type=int, default=50, help="Max pages for authenticated crawl")
+    p.add_argument("--probe-access-control", action="store_true", help="Enable IDOR/ACL probes")
     return p
 
 
@@ -243,6 +281,13 @@ def main() -> None:
         "check_manifests": args.check_manifests,
         "chat_endpoint": args.chat_endpoint,
         "network_scan": args.network_scan,
+        "auth_login_url": args.auth_login_url,
+        "auth_username": args.auth_username,
+        "auth_password": args.auth_password or os.environ.get("AUTH_PASSWORD", ""),
+        "session_cookie": args.session_cookie,
+        "auth_header": args.auth_header,
+        "max_pages": args.max_pages,
+        "probe_access_control": args.probe_access_control,
     }
 
     # Aggregate module alerts
