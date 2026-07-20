@@ -28,6 +28,7 @@ from zap_scan import (
     _log_scan_event,
     _make_zap,
     _parse_alerts,
+    _prepare_findings,
     _summary,
     _load_manual_findings,
     _load_business_context,
@@ -53,13 +54,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--entity-name",
-        required=True,
-        help="Name of the regulated entity being assessed",
+        default=os.environ.get("ENTITY_NAME", ""),
+        help="Name of the regulated entity (default: ENTITY_NAME env var)",
     )
     p.add_argument(
         "--entity-lei",
-        required=True,
-        help="Legal Entity Identifier (LEI) or registration number",
+        default=os.environ.get("ENTITY_LEI", "Not provided"),
+        help="LEI or registration number (default: ENTITY_LEI env var)",
     )
     p.add_argument(
         "--api-key",
@@ -85,8 +86,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--assessor-name",
-        required=True,
-        help="Full name of the person/team performing the assessment",
+        default=os.environ.get("ASSESSOR_NAME", getpass.getuser()),
+        help="Assessor name (default: ASSESSOR_NAME env var or OS username)",
     )
     p.add_argument(
         "--assessment-date",
@@ -101,10 +102,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--format",
-        choices=["md", "html", "json"],
-        default="md",
+        choices=["md", "html", "json", "pdf"],
+        default=os.environ.get("REPORT_FORMAT", "md"),
         dest="report_format",
-        help="Report format (default: md)",
+        help="Report format (default: REPORT_FORMAT env var or md)",
     )
     p.add_argument(
         "--timeout",
@@ -118,12 +119,14 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="URL patterns excluded from scanning",
     )
+    _env_modules = os.environ.get("CUSTOM_MODULES", "")
+    _default_modules = [m.strip() for m in _env_modules.split(",") if m.strip()] or None
     p.add_argument(
         "--custom-modules",
         nargs="*",
-        default=None,
+        default=_default_modules,
         choices=["auth", "supply-chain", "prompt-injection", "ransomware", "authenticated-scan", "tls", "api-discovery", "all"],
-        help="Run custom Python security modules alongside the ZAP scan",
+        help="Security modules to run (default: CUSTOM_MODULES env var)",
     )
     p.add_argument(
         "--modules-confirm",
@@ -146,7 +149,7 @@ def build_parser() -> argparse.ArgumentParser:
 def resolve_output(args: argparse.Namespace) -> pathlib.Path:
     if args.output:
         return args.output
-    ext = {"md": "md", "html": "html", "json": "json"}
+    ext = {"md": "md", "html": "html", "json": "json", "pdf": "pdf"}
     ts = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
     return pathlib.Path(f"dora_assessment_{ts}.{ext[args.report_format]}")
 
@@ -170,7 +173,7 @@ def _validate_inputs(args: argparse.Namespace) -> None:
             f"--entity-name '{args.entity_name}' looks like a placeholder. "
             "Use the actual registered name of the entity being assessed."
         )
-    if _looks_like_placeholder(args.entity_lei):
+    if args.entity_lei != "Not provided" and _looks_like_placeholder(args.entity_lei):
         problems.append(
             f"--entity-lei '{args.entity_lei}' looks like a placeholder. "
             "Use the entity's real LEI or national registration number."
@@ -188,6 +191,12 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
     output_path = resolve_output(args)
+
+    if not args.entity_name:
+        sys.exit(
+            "ERROR: --entity-name is required.\n"
+            "  Set it via the command line or add ENTITY_NAME to your .env file."
+        )
 
     _validate_inputs(args)
 
@@ -299,8 +308,23 @@ def main() -> None:
     elif args.report_format == "html":
         _report_html(args.target, "full", alerts, output_path,
                      **report_kwargs)
+    elif args.report_format == "pdf":
+        html_tmp = output_path.with_suffix(".html")
+        _report_html(args.target, "full", alerts, html_tmp, **report_kwargs)
+        try:
+            from weasyprint import HTML
+            HTML(filename=str(html_tmp)).write_pdf(str(output_path))
+            html_tmp.unlink()
+        except ImportError:
+            sys.exit(
+                "ERROR: PDF output requires weasyprint.\n"
+                "  Install it with: pip install weasyprint"
+            )
 
-    summary = _summary(args.target, "full", alerts)
+    # Use deduplicated/merged findings for the console summary so the counts
+    # match what the report (which also dedupes via _prepare_findings) shows.
+    merged_findings, _has_manual = _prepare_findings(alerts, manual_findings)
+    summary = _summary(args.target, "full", merged_findings)
     print(f"\nReport written to {output_path}")
     print(f"Total vulnerabilities: {summary['total_alerts']}")
     for sev in ("Critical", "High", "Medium", "Low", "Informational"):

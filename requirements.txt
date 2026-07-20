@@ -5,3 +5,4 @@ python-dotenv>=1.0.0,<2
 pyyaml>=6.0,<7
 # optional: headless browser rendering for JS-heavy targets (auth_test, supply_chain, prompt_injection). Run 'playwright install chromium' after pip install.
 playwright>=1.40.0,<2
+weasyprint>=62.0,<64
