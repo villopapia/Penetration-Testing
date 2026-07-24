@@ -4,3 +4,6 @@ __pycache__/
 .qodo/
 .claude/
 scan_audit.log
+build/
+dist/
+*.spec

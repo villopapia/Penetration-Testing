@@ -10,11 +10,13 @@ Automated vulnerability assessment toolkit for CySEC ICT regulatory assessments 
 - `run_modules.py` — Custom Python modules only (no ZAP needed).
 - `zap_scan.py` — ZAP-only scan with report generation.
 - `combined_report.py` — Merges ZAP JSON + manual findings YAML into one report.
+- `gui_app.py` — Tkinter GUI wrapper around `run_modules.py`'s module scan, for running without a terminal. Replaces the CLI's `input()`-based active-test confirmation with a dialog box (see `App._gui_confirm` / `_patch_confirm_prompts`). Package it into a standalone Windows exe with `build_exe.py` (PyInstaller, `--onefile --windowed`) for handing to users with no Python/pip/terminal access. That build intentionally excludes `playwright`/`weasyprint` (native binaries, not worth bundling) and IPython's transitive stack (dragged in only by a dead code path in `python-dotenv`, ~40MB of dead weight).
 
 ## Configuration
 
 All defaults live in `.env` (loaded via python-dotenv):
 - `ZAP_API_KEY`, `ENTITY_NAME`, `ENTITY_LEI`, `ASSESSOR_NAME`, `REPORT_FORMAT`, `CUSTOM_MODULES`
+- `REPORT_FORMAT` accepts `md`, `html`, `json`, or `pdf` (pdf requires `weasyprint`, renders via HTML first).
 - Minimal command: `python assess.py --target https://example.com`
 
 ## Custom modules (in `modules/`)
@@ -74,7 +76,9 @@ pytest tests/ -v
 
 ## Wordlists (`wordlists/`)
 
-- `default_credentials.txt` — Common username:password pairs
-- `admin_paths.txt` — Admin panel URL paths
-- `api_spec_paths.txt` — OpenAPI/Swagger spec paths
-- `graphql_paths.txt` — GraphQL endpoint paths
+- `default_credentials.txt` — Common username:password pairs (`auth_test.py`)
+- `login_paths.txt` — Candidate login page paths for discovery (`auth_test.py`)
+- `api_spec_paths.txt` — OpenAPI/Swagger spec paths (`api_discovery.py`)
+- `graphql_paths.txt` — GraphQL endpoint paths (`api_discovery.py`)
+
+Note: admin panel paths (`ransomware_readiness.py`) are hardcoded in `ADMIN_PATHS`, not a wordlist file.

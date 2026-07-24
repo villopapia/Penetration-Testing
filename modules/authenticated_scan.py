@@ -45,6 +45,28 @@ _ID_PATTERN = re.compile(
     re.I,
 )
 
+# Denial phrases for IDOR probes, split by how specific they are. Tunable per
+# assessment since target wording varies; neither list is exhaustive.
+#
+# STRONG: specific enough that a single match means the probe was denied.
+_IDOR_DENIAL_STRONG = (
+    "not found", "forbidden", "access denied", "permission denied",
+    "you don't have permission", "you do not have permission",
+    "unauthorized", "unauthorised", "not authorized", "not authorised",
+)
+# WEAK: short/generic words that also occur in legitimate page chrome
+# (privacy-policy links, T&Cs, unrelated UI labels). A single weak match is
+# NOT treated as denial on its own, because doing so would silently drop a
+# genuinely leaked IDOR response as a false "denial" (a false negative).
+_IDOR_DENIAL_WEAK = (
+    "private", "restricted", "no access", "not allowed",
+)
+# A weak match only counts as a denial when corroborated: either 2+ distinct
+# weak phrases appear, or a single weak phrase appears in a small,
+# error-page-sized response. Above this size a lone weak word is far more
+# likely to be incidental content than a denial notice.
+_IDOR_WEAK_BODY_MAX = 500
+
 
 # ---------------------------------------------------------------------------
 # Login
@@ -169,14 +191,10 @@ def login_and_get_session(
                 if any(tok in cookie.name.lower() for tok in ("session", "auth", "token", "sid")):
                     login_ok = True
                     break
-        if not login_ok and login_resp.history:
-            final_path = urlparse(login_resp.url).path.lower()
-            if not any(x in final_path for x in ("login", "signin")):
-                login_ok = True
 
         if login_ok:
             return session, f"Logged in as {username} via form submission"
-        return None, "Login attempt did not produce success indicators"
+        return None, "Login attempt did not produce a success indicator (no matching keyword and no new session/auth cookie)"
 
     return None, "No credentials supplied"
 
@@ -280,15 +298,32 @@ def test_horizontal_access_control(
 
         auth_len = len(auth_resp.text)
         unauth_len = len(resp.text)
-        if auth_len > 0 and abs(unauth_len - auth_len) / max(auth_len, 1) < 0.2:
+        length_similar = auth_len > 0 and abs(unauth_len - auth_len) / max(auth_len, 1) < 0.2
+
+        auth_text = _visible_text(auth_resp.text)
+        unauth_text = _visible_text(resp.text)
+        auth_text_len = len(auth_text)
+        unauth_text_len = len(unauth_text)
+        text_similar = (
+            auth_text_len > 0
+            and abs(unauth_text_len - auth_text_len) / max(auth_text_len, 1) < 0.2
+        )
+
+        if length_similar and text_similar:
             alerts.append(make_alert(
-                risk="High",
+                risk="Medium",
                 alert_name="Broken Access Control: Page Accessible Without Authentication",
                 url=url,
                 description=(
                     f"The authenticated page at {url} is also accessible without "
-                    f"authentication. Content length is similar (auth={auth_len}, "
-                    f"unauth={unauth_len}), suggesting the full page content is exposed."
+                    f"authentication. Both raw content length (auth={auth_len}, "
+                    f"unauth={unauth_len}) and visible text length excluding "
+                    f"script/style/nav/footer chrome (auth={auth_text_len}, "
+                    f"unauth={unauth_text_len}) are similar, suggesting the same "
+                    "substantive content is exposed. This is a heuristic match on "
+                    "response size, not a confirmed content diff -- manually verify "
+                    "that the unauthenticated response actually contains the "
+                    "protected data before treating this as confirmed."
                 ),
                 solution=(
                     "Enforce authentication and authorization checks on all "
@@ -302,9 +337,37 @@ def test_horizontal_access_control(
     return alerts
 
 
+def _visible_text(html: str) -> str:
+    """Strip script/style/nav/footer chrome and return normalised visible text."""
+    soup = parse_html(html)
+    for tag in soup(["script", "style", "nav", "footer", "head"]):
+        tag.decompose()
+    return " ".join(soup.get_text(separator=" ").split())
+
+
 def _has_password_field_in_html(html: str) -> bool:
     soup = parse_html(html)
     return bool(soup.find("input", attrs={"type": "password"}))
+
+
+def _looks_like_denial(body_lower: str, body_len: int) -> bool:
+    """Return True if an adjacent-ID response looks like an access denial
+    rather than genuinely leaked data.
+
+    Strong phrases count on their own. Weak/generic phrases only count when
+    corroborated -- 2+ distinct weak phrases, or one weak phrase in a small
+    (error-page-sized) body -- so a leaked page that merely mentions a word
+    like "private" or "restricted" in unrelated chrome is not misclassified
+    as a denial and dropped.
+    """
+    if any(p in body_lower for p in _IDOR_DENIAL_STRONG):
+        return True
+    weak_hits = sum(1 for p in _IDOR_DENIAL_WEAK if p in body_lower)
+    if weak_hits >= 2:
+        return True
+    if weak_hits >= 1 and body_len < _IDOR_WEAK_BODY_MAX:
+        return True
+    return False
 
 
 def test_idor_probe(
@@ -349,19 +412,24 @@ def test_idor_probe(
             if resp.status_code != 200:
                 continue
             body_lower = resp.text.lower()
-            if any(x in body_lower for x in ("not found", "forbidden", "access denied")):
+            if _looks_like_denial(body_lower, len(resp.text)):
                 continue
             if len(resp.text) < 200:
                 continue
 
             alerts.append(make_alert(
-                risk="High",
+                risk="Medium",
                 alert_name="Potential Insecure Direct Object Reference (IDOR)",
                 url=adj_url,
                 description=(
                     f"Accessing {adj_url} (adjacent ID to {url}) returned "
-                    f"HTTP 200 with {len(resp.text)} bytes of content. "
-                    f"This may indicate unauthorized access to another user's data."
+                    f"HTTP 200 with {len(resp.text)} bytes of content, and none "
+                    "of the known denial phrases were present. This is a "
+                    "heuristic match, not a confirmed IDOR: the resource may "
+                    "legitimately deny access with different wording, or may be "
+                    "intentionally public (e.g. an order-confirmation page). "
+                    "Manually verify that this response actually contains "
+                    "another user's data before treating it as confirmed."
                 ),
                 solution=(
                     "Implement proper authorization checks on all endpoints "

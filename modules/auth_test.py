@@ -17,6 +17,8 @@ import warnings
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
+import requests
+
 from modules.common import (
     make_alert,
     get_session,
@@ -323,7 +325,6 @@ def check_csrf_protection(
                         reference="https://cwe.mitre.org/data/definitions/352.html",
                     ))
                     break
-            break
     return alerts
 
 
@@ -620,6 +621,7 @@ def test_brute_force_protection(
     for ep in usable_endpoints:
         protection_detected = False
         response_times: list[float] = []
+        consecutive_connection_errors = 0
 
         for i in range(1, attempts + 1):
             fake_password = f"invalid_pw_{i}_{int(time.time())}"
@@ -645,6 +647,20 @@ def test_brute_force_protection(
                     )
                 elapsed = time.monotonic() - start
                 response_times.append(elapsed)
+                consecutive_connection_errors = 0
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
+                consecutive_connection_errors += 1
+                logger.debug("Brute-force attempt %d failed: %s", i, exc)
+                if consecutive_connection_errors >= 3:
+                    protection_detected = True
+                    logger.info(
+                        "Brute-force protection detected: %d consecutive connection-level "
+                        "errors (%s) after %d attempts",
+                        consecutive_connection_errors, exc.__class__.__name__, i,
+                    )
+                    break
+                time.sleep(1)
+                continue
             except Exception as exc:
                 logger.debug("Brute-force attempt %d failed: %s", i, exc)
                 time.sleep(1)
