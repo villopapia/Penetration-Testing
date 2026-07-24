@@ -298,7 +298,8 @@ def test_horizontal_access_control(
 
         auth_len = len(auth_resp.text)
         unauth_len = len(resp.text)
-        length_similar = auth_len > 0 and abs(unauth_len - auth_len) / max(auth_len, 1) < 0.2
+        length_diff_pct = abs(unauth_len - auth_len) / max(auth_len, 1) * 100
+        length_similar = auth_len > 0 and length_diff_pct < 20
 
         auth_text = _visible_text(auth_resp.text)
         unauth_text = _visible_text(resp.text)
@@ -309,21 +310,37 @@ def test_horizontal_access_control(
             and abs(unauth_text_len - auth_text_len) / max(auth_text_len, 1) < 0.2
         )
 
-        if length_similar and text_similar:
+        # Visible-text similarity is the sole flag driver: identical substantive
+        # content served to both sessions signals broken access control even when
+        # raw length diverges due to layout chrome (nav/footer) that differs
+        # between logged-in and logged-out views. Raw-length agreement is only a
+        # corroborating detail, not a requirement.
+        if text_similar:
+            if length_similar:
+                length_note = (
+                    f"raw content length is also similar (auth={auth_len}, "
+                    f"unauth={unauth_len}, differs by {length_diff_pct:.0f}%)"
+                )
+            else:
+                length_note = (
+                    f"raw content length differs by {length_diff_pct:.0f}% "
+                    f"(auth={auth_len}, unauth={unauth_len}), likely due to layout "
+                    "chrome (nav/footer) that varies between authenticated and "
+                    "unauthenticated views"
+                )
             alerts.append(make_alert(
                 risk="Medium",
                 alert_name="Broken Access Control: Page Accessible Without Authentication",
                 url=url,
                 description=(
                     f"The authenticated page at {url} is also accessible without "
-                    f"authentication. Both raw content length (auth={auth_len}, "
-                    f"unauth={unauth_len}) and visible text length excluding "
-                    f"script/style/nav/footer chrome (auth={auth_text_len}, "
-                    f"unauth={unauth_text_len}) are similar, suggesting the same "
-                    "substantive content is exposed. This is a heuristic match on "
-                    "response size, not a confirmed content diff -- manually verify "
-                    "that the unauthenticated response actually contains the "
-                    "protected data before treating this as confirmed."
+                    f"authentication. Visible text excluding script/style/nav/footer "
+                    f"chrome is similar (auth={auth_text_len}, unauth={unauth_text_len} "
+                    f"chars), suggesting the same substantive content is exposed; "
+                    f"{length_note}. This is a heuristic match, not a confirmed "
+                    "content diff -- manually verify that the unauthenticated "
+                    "response actually contains the protected data before treating "
+                    "this as confirmed."
                 ),
                 solution=(
                     "Enforce authentication and authorization checks on all "
@@ -332,6 +349,11 @@ def test_horizontal_access_control(
                 ),
                 cweid="284",
                 reference="https://cwe.mitre.org/data/definitions/284.html",
+                evidence=(
+                    f"visible-text chars auth={auth_text_len} unauth={unauth_text_len}; "
+                    f"raw bytes auth={auth_len} unauth={unauth_len} "
+                    f"(diff {length_diff_pct:.0f}%)"
+                ),
             ))
 
     return alerts

@@ -6,11 +6,27 @@ Automated vulnerability assessment toolkit for CySEC ICT regulatory assessments 
 
 ## Entry points
 
-- `assess.py` — Full assessment: ZAP scan + custom modules, single DORA report. **Primary entry point.**
-- `run_modules.py` — Custom Python modules only (no ZAP needed).
+Two supported coverage modes:
+
+**Full-coverage path (ZAP available):**
+- `assess.py` — Full assessment: ZAP scan + custom modules, single DORA report. **Primary entry point.** Passes `scan_type="full"` to the report pipeline.
 - `zap_scan.py` — ZAP-only scan with report generation.
 - `combined_report.py` — Merges ZAP JSON + manual findings YAML into one report.
+
+**Standalone no-ZAP path (officially supported reduced-scope mode):**
+- `run_modules.py` — Custom Python modules only. No ZAP daemon, no `ZAP_API_KEY`, and `zaproxy`/`zapv2` need not be installed (`zapv2` is only imported inside ZAP-specific functions in `zap_scan.py`, never at import time, so `run_modules.py` can import the report pipeline without it). Passes `scan_type="modules"`.
 - `gui_app.py` — Tkinter GUI wrapper around `run_modules.py`'s module scan, for running without a terminal. Replaces the CLI's `input()`-based active-test confirmation with a dialog box (see `App._gui_confirm` / `_patch_confirm_prompts`). Package it into a standalone Windows exe with `build_exe.py` (PyInstaller, `--onefile --windowed`) for handing to users with no Python/pip/terminal access. That build intentionally excludes `playwright`/`weasyprint` (native binaries, not worth bundling) and IPython's transitive stack (dragged in only by a dead code path in `python-dotenv`, ~40MB of dead weight).
+
+### No-ZAP mode: what it does and does NOT cover
+
+The no-ZAP path runs only the named custom module checks (auth, supply-chain, TLS, API discovery, admin-panel/security-header, prompt-injection, authenticated crawl). It does **NOT** perform OWASP ZAP's active vulnerability/injection scan — no generalized XSS, SQL injection, command injection, or path-traversal testing, and no spider-driven active scan. Use `assess.py` (with ZAP running) for full coverage.
+
+When `scan_type == "modules"`, the report is honestly re-labeled so a reader cannot mistake "ZAP was not run" for "ZAP ran and found nothing":
+- Detection helper: `_is_modules_only(scan_type)` in `zap_scan.py`.
+- Executive Summary: methodology reads "custom security modules only — OWASP ZAP active scan NOT performed", plus a prominent reduced-scope banner.
+- Scope & Methodology (Section 5): Tools Used states ZAP was not used; Test Types Performed lists the actual modules run (via `_MODULE_DISPLAY_NAMES` + the `modules_run` list threaded through `_report_md`/`_report_html`/`_report_json` → `_build_report_sections`); Test Types Not Performed explicitly calls out the missing active/injection scan and which modules weren't selected.
+- DORA Alignment (Section 6): adds a scope-limitation note that the mapping reflects only the named checks, not a full active vulnerability assessment.
+- JSON report: `summary.zap_performed=false`, `summary.modules_run`, and `summary.coverage_note`.
 
 ## Configuration
 

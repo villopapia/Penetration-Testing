@@ -326,11 +326,13 @@ def main() -> None:
         exclude_urls=None,
         manual_findings=None,
         business_context=None,
+        modules_run=selected,
     )
 
     if args.report_format == "json":
         _report_json(args.target, scan_type, alerts, output_path,
-                     regulatory_framework=args.regulatory_framework)
+                     regulatory_framework=args.regulatory_framework,
+                     modules_run=selected)
     elif args.report_format == "md":
         _report_md(args.target, scan_type, alerts, output_path, **report_kwargs)
     elif args.report_format == "html":

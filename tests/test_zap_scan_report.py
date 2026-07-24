@@ -182,6 +182,139 @@ class TestReportMd:
         assert "## 7. Disclaimer" in content
 
 
+class TestNoZapModeLabeling:
+    """The standalone no-ZAP mode (scan_type='modules') must be labelled so a
+    reader cannot mistake 'ZAP was not run' for 'ZAP ran and found nothing'."""
+
+    def _modules_report(self, tmp_path, modules_run):
+        alerts = _parse_alerts([_raw(alert="Missing Security Header", cweid="693")])
+        out = tmp_path / "modules.md"
+        _report_md(
+            "https://x.com", "modules", alerts, out,
+            assessor_name="tester", assessment_date="2026-07-24",
+            regulatory_framework="dora", modules_run=modules_run,
+        )
+        return out.read_text(encoding="utf-8")
+
+    def test_exec_summary_states_zap_not_run(self, tmp_path):
+        content = self._modules_report(tmp_path, ["tls", "api-discovery"])
+        assert "OWASP ZAP active scan NOT performed" in content
+        assert "Reduced-scope assessment" in content
+        assert "Custom modules only (no OWASP ZAP scan)" in content
+
+    def test_scope_lists_modules_run_and_omits_zap_tool(self, tmp_path):
+        content = self._modules_report(tmp_path, ["tls", "api-discovery"])
+        # Tools Used must NOT claim ZAP was the scanner
+        assert "OWASP ZAP (automated vulnerability scanner)" not in content
+        assert "OWASP ZAP was **NOT** used" in content
+        # The specific modules run are listed by their display names
+        assert "TLS/certificate checks" in content
+        assert "API surface discovery" in content
+        # Missing active/injection scan is explicit
+        assert "No generalized injection testing" in content
+
+    def test_dora_section_has_scope_limitation(self, tmp_path):
+        content = self._modules_report(tmp_path, ["tls"])
+        assert "Scope limitation for this mapping" in content
+
+    def test_authenticated_scan_login_failure_qualified(self, tmp_path):
+        """A failed-login authenticated-scan run must be listed under Test Types
+        Performed WITH an explicit note, not identically to a successful run."""
+        # The login-failure signal is the alert authenticated_scan emits.
+        alerts = _parse_alerts([_raw(
+            risk="Informational", riskcode="0",
+            alert="Authenticated Scanning Skipped - Login Failed",
+        )])
+        out = tmp_path / "authfail.md"
+        _report_md(
+            "https://x.com", "modules", alerts, out,
+            assessor_name="tester", assessment_date="2026-07-24",
+            regulatory_framework="none",
+            modules_run=["authenticated-scan", "tls"],
+        )
+        content = out.read_text(encoding="utf-8")
+        assert "login failed, authenticated crawl NOT performed" in content
+
+    def test_authenticated_scan_login_success_unqualified(self, tmp_path):
+        """A successful authenticated-scan run (no login-failure alert) must NOT
+        carry the failure qualifier."""
+        alerts = _parse_alerts([_raw(
+            risk="Informational", riskcode="0",
+            alert="Authenticated Attack Surface Discovered",
+        )])
+        out = tmp_path / "authok.md"
+        _report_md(
+            "https://x.com", "modules", alerts, out,
+            assessor_name="tester", assessment_date="2026-07-24",
+            regulatory_framework="none",
+            modules_run=["authenticated-scan", "tls"],
+        )
+        content = out.read_text(encoding="utf-8")
+        assert "login failed, authenticated crawl NOT performed" not in content
+        # but the module is still listed as performed
+        assert "Authenticated crawl with broken-access-control" in content
+
+    def test_full_zap_path_unchanged(self, tmp_path):
+        """Guard: the ZAP-backed path must NOT gain the no-ZAP banner/labels."""
+        alerts = _parse_alerts([_raw(alert="Missing Security Header", cweid="693")])
+        out = tmp_path / "full.md"
+        _report_md(
+            "https://x.com", "full", alerts, out,
+            assessor_name="tester", assessment_date="2026-07-24",
+            regulatory_framework="dora",
+        )
+        content = out.read_text(encoding="utf-8")
+        assert "- **Methodology**: Automated (OWASP ZAP)" in content
+        assert "OWASP ZAP (automated vulnerability scanner)" in content
+        assert "Reduced-scope assessment" not in content
+        assert "Scope limitation for this mapping" not in content
+
+
+class TestHtmlPrintFriendliness:
+    """The HTML report must carry print CSS so a browser 'Save as PDF' looks
+    intentional: colours preserved, findings/tables kept whole, wide values wrap."""
+
+    def _html(self, tmp_path):
+        from zap_scan import _report_html
+        alerts = _parse_alerts([
+            _raw(risk="High", riskcode="3", alert="Default Credentials Accepted", cweid="521"),
+            _raw(risk="Medium", riskcode="2", alert="Missing Security Header", cweid="693"),
+        ])
+        out = tmp_path / "report.html"
+        _report_html(
+            "https://example.com", "modules", alerts, out,
+            assessor_name="tester", assessment_date="2026-07-24",
+            regulatory_framework="dora", modules_run=["auth", "tls"],
+        )
+        return out.read_text(encoding="utf-8")
+
+    def test_template_formats_without_brace_leak(self, tmp_path):
+        html = self._html(tmp_path)
+        # A stray single brace in the CSS would raise in str.format; doubled
+        # braces would leak literally. Neither should appear.
+        assert "{{" not in html and "}}" not in html
+
+    def test_has_print_color_adjust(self, tmp_path):
+        html = self._html(tmp_path)
+        assert "print-color-adjust: exact" in html
+        assert "-webkit-print-color-adjust: exact" in html
+
+    def test_has_page_and_break_rules(self, tmp_path):
+        html = self._html(tmp_path)
+        assert "@media print" in html
+        assert "@page" in html
+        assert "break-inside: avoid" in html
+        assert "break-after: avoid" in html
+        assert "overflow-wrap: anywhere" in html
+
+    def test_findings_wrapped_for_atomic_pagination(self, tmp_path):
+        html = self._html(tmp_path)
+        # Each technical finding is wrapped so print CSS can keep it whole.
+        assert html.count('<div class="finding">') == 2
+        # Wrappers are balanced (only finding divs are emitted).
+        assert html.count("<div") == html.count("</div>")
+
+
 class TestMapFindingToDoraCategory:
     def test_ict_risk(self):
         assert _map_finding_to_dora_category({"alert": "CSRF issue", "description": ""}) == "ict_risk_management"

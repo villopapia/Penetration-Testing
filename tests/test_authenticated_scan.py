@@ -2,7 +2,40 @@
 from __future__ import annotations
 
 import pytest
-from tests.conftest import FakeResponse, FakeSession
+from tests.conftest import FakeCookieJar, FakeResponse, FakeSession
+
+
+# Login page carrying a password form, used by the Strategy 3 (form login) tests.
+_FORM_LOGIN_PAGE = """\
+<html><body>
+<form method="POST" action="/auth/login">
+  <input type="text" name="username">
+  <input type="password" name="password">
+  <button type="submit">Log In</button>
+</form>
+</body></html>
+"""
+
+
+class FormLoginSession(FakeSession):
+    """Fake session for Strategy 3: every GET returns the login page (initial
+    fetch + the CSRF refresh re-GET), and POST returns a configurable login
+    response."""
+
+    def __init__(self, post_response: FakeResponse):
+        super().__init__({})
+        self._login_page = FakeResponse(
+            200, _FORM_LOGIN_PAGE, url="https://example.com/login",
+        )
+        self._post_response = post_response
+
+    def get(self, url, **kwargs):
+        self.call_log.append({"method": "GET", "url": url, "kwargs": kwargs})
+        return self._login_page
+
+    def post(self, url, **kwargs):
+        self.call_log.append({"method": "POST", "url": url, "kwargs": kwargs})
+        return self._post_response
 
 
 class TestLoginAndGetSession:
@@ -58,6 +91,87 @@ class TestLoginAndGetSession:
         session, msg = mod.login_and_get_session("https://example.com")
         assert session is None
         assert "no credentials" in msg.lower()
+
+
+class TestFormLoginSuccessDetection:
+    """Fix #2: Strategy 3 (username+password) must NOT treat a mere non-login
+    redirect as success. Success requires a positive indicator or a new
+    session/auth cookie."""
+
+    def test_failure_redirect_without_indicator_returns_none(self, monkeypatch):
+        """Failed login that redirects to a non-login-named path with no success
+        indicator and no auth cookie must return None (the exact false positive
+        the fix removed -- previously any redirect off /login counted as success)."""
+        from modules import authenticated_scan as mod
+
+        # Redirect to a dashboard-looking path, but the body carries NO success
+        # indicator and NO auth cookie -> a genuine failure dressed as a redirect.
+        post_resp = FakeResponse(
+            200,
+            "<html><body>Authentication failed. Please try again.</body></html>",
+            url="https://example.com/dashboard?auth=failed",
+            history=[FakeResponse(302, "", url="https://example.com/auth/login")],
+            cookies={},
+        )
+        fake = FormLoginSession(post_resp)
+        monkeypatch.setattr(mod, "get_session", lambda **kw: fake)
+
+        session, msg = mod.login_and_get_session(
+            "https://example.com",
+            login_url="/login",
+            username="user",
+            password="pw",
+        )
+        assert session is None
+        assert "success indicator" in msg.lower()
+
+    def test_success_via_indicator_returns_session(self, monkeypatch):
+        """Genuine success signalled by a success indicator in the body -> a
+        valid session is returned (legitimate success path still works)."""
+        from modules import authenticated_scan as mod
+
+        post_resp = FakeResponse(
+            200,
+            "<html><body>Welcome! <a href='/logout'>Logout</a></body></html>",
+            url="https://example.com/dashboard",
+            cookies={},
+        )
+        fake = FormLoginSession(post_resp)
+        monkeypatch.setattr(mod, "get_session", lambda **kw: fake)
+
+        session, msg = mod.login_and_get_session(
+            "https://example.com",
+            login_url="/login",
+            username="user",
+            password="pw",
+        )
+        assert session is fake
+        assert "logged in" in msg.lower()
+
+    def test_success_via_session_cookie_returns_session(self, monkeypatch):
+        """Genuine success signalled only by a new session cookie (no textual
+        indicator) -> a valid session is returned."""
+        from modules import authenticated_scan as mod
+
+        jar = FakeCookieJar()
+        jar.set("sessionid", "xyz789")
+        post_resp = FakeResponse(
+            200,
+            "<html><body>OK</body></html>",  # no success indicator in text
+            url="https://example.com/home",
+            cookies=jar,
+        )
+        fake = FormLoginSession(post_resp)
+        monkeypatch.setattr(mod, "get_session", lambda **kw: fake)
+
+        session, msg = mod.login_and_get_session(
+            "https://example.com",
+            login_url="/login",
+            username="user",
+            password="pw",
+        )
+        assert session is fake
+        assert "logged in" in msg.lower()
 
 
 class TestCrawlAuthenticated:
@@ -170,6 +284,133 @@ class TestAccessControlProbes:
         pages = [{"url": "https://example.com/admin", "status": 200, "title": "Admin"}]
         alerts = test_horizontal_access_control(auth_session, unauth_session, pages)
         assert len(alerts) == 0
+
+    def test_similar_length_but_different_visible_text_not_flagged(self, fake_session_factory):
+        """Fix #4: raw lengths are near-identical, but visible text differs
+        substantively after stripping script/nav/footer chrome -> the text
+        check must prevent a flag that raw-length-alone would have raised."""
+        from modules.authenticated_scan import test_horizontal_access_control
+
+        auth_html = (
+            "<html><body><p>"
+            + ("Secret account data row " * 12)
+            + "</p></body></html>"
+        )
+        # Unauth: real content lives in <script> (stripped from visible text),
+        # visible body is just a tiny prompt. Pad the script so the RAW length
+        # matches auth_html exactly -> length_similar is True, text_similar False.
+        base = "<html><body><script></script><p>Login required</p></body></html>"
+        pad = max(0, len(auth_html) - len(base))
+        unauth_html = (
+            "<html><body><script>"
+            + ("z" * pad)
+            + "</script><p>Login required</p></body></html>"
+        )
+
+        auth_session = fake_session_factory({
+            "/report": FakeResponse(200, auth_html, url="https://example.com/report"),
+        })
+        unauth_session = fake_session_factory({
+            "/report": FakeResponse(200, unauth_html, url="https://example.com/report"),
+        })
+
+        pages = [{"url": "https://example.com/report", "status": 200, "title": "Report"}]
+        alerts = test_horizontal_access_control(auth_session, unauth_session, pages)
+        assert alerts == []
+
+    def test_chrome_differs_but_visible_text_matches_flags_medium(self, fake_session_factory):
+        """Fix #4: raw length differs (different nav/footer between logged-in and
+        logged-out views) but stays within the 20% band, while visible text is
+        identical -> flag as Medium with the manual-verification note."""
+        from modules.authenticated_scan import test_horizontal_access_control
+
+        shared = "Account statement line item number 5567 amount 128.40 status posted " * 6
+        auth_html = (
+            "<html><body>"
+            "<nav>Home Dashboard Reports Settings Profile Logout</nav>"
+            f"<main>{shared}</main>"
+            "<footer>Signed in as analyst@corp</footer>"
+            "</body></html>"
+        )
+        unauth_html = (
+            "<html><body>"
+            "<nav>Home Login</nav>"
+            f"<main>{shared}</main>"
+            "<footer>Guest session</footer>"
+            "</body></html>"
+        )
+
+        auth_session = fake_session_factory({
+            "/report": FakeResponse(200, auth_html, url="https://example.com/report"),
+        })
+        unauth_session = fake_session_factory({
+            "/report": FakeResponse(200, unauth_html, url="https://example.com/report"),
+        })
+
+        pages = [{"url": "https://example.com/report", "status": 200, "title": "Report"}]
+        alerts = test_horizontal_access_control(auth_session, unauth_session, pages)
+        assert len(alerts) == 1
+        assert alerts[0]["risk"] == "Medium"
+        assert "manually verify" in alerts[0]["description"].lower()
+
+    def test_large_length_diff_still_flags_when_text_matches(self, fake_session_factory):
+        """Fix #4 (revised): visible text is identical but a large nav pushes
+        raw-length variance well beyond 20%. Flagging now keys on visible-text
+        similarity alone, so this DOES flag as Medium; the raw-length divergence
+        is recorded as a corroborating detail, not a gate."""
+        from modules.authenticated_scan import test_horizontal_access_control
+
+        shared = "Account statement line item number 5567 amount 128.40 status posted " * 6
+        auth_html = (
+            "<html><body>"
+            f"<nav>{'Menu item link ' * 40}</nav>"
+            f"<main>{shared}</main>"
+            "</body></html>"
+        )
+        unauth_html = f"<html><body><nav>Home</nav><main>{shared}</main></body></html>"
+
+        auth_session = fake_session_factory({
+            "/report": FakeResponse(200, auth_html, url="https://example.com/report"),
+        })
+        unauth_session = fake_session_factory({
+            "/report": FakeResponse(200, unauth_html, url="https://example.com/report"),
+        })
+
+        pages = [{"url": "https://example.com/report", "status": 200, "title": "Report"}]
+        alerts = test_horizontal_access_control(auth_session, unauth_session, pages)
+        assert len(alerts) == 1
+        assert alerts[0]["risk"] == "Medium"
+        desc = alerts[0]["description"].lower()
+        assert "manually verify" in desc
+        # raw-length divergence is reported as corroborating chrome detail
+        assert "chrome" in desc and "differs by" in desc
+
+    def test_length_and_text_both_differ_not_flagged(self, fake_session_factory):
+        """Fix #4 (revised): with the length gate removed, confirm the flag is
+        NOT raised on length alone -- when visible text is genuinely different
+        (and raw length also wildly different), no alert fires. Guards against
+        regressing into length-only false positives."""
+        from modules.authenticated_scan import test_horizontal_access_control
+
+        auth_html = (
+            "<html><body><main>"
+            + ("Confidential payroll record for employee 8891 net pay 3204.55 " * 8)
+            + "</main></body></html>"
+        )
+        # Different content AND very different length; no password field so the
+        # login-page skip does not mask the result.
+        unauth_html = "<html><body><main>Please sign in to continue.</main></body></html>"
+
+        auth_session = fake_session_factory({
+            "/report": FakeResponse(200, auth_html, url="https://example.com/report"),
+        })
+        unauth_session = fake_session_factory({
+            "/report": FakeResponse(200, unauth_html, url="https://example.com/report"),
+        })
+
+        pages = [{"url": "https://example.com/report", "status": 200, "title": "Report"}]
+        alerts = test_horizontal_access_control(auth_session, unauth_session, pages)
+        assert alerts == []
 
 
 class TestIdorProbe:

@@ -69,11 +69,47 @@ def _check_zap_reachable(base_url: str, api_key: str) -> None:
 # Audit logging
 # ---------------------------------------------------------------------------
 
-AUDIT_LOG = pathlib.Path("scan_audit.log")
+def _default_audit_log_path() -> pathlib.Path:
+    """Preferred audit-log location.
+
+    When frozen into a standalone exe (PyInstaller), write next to the
+    executable so the log lands somewhere predictable and writable rather
+    than in an arbitrary (possibly read-only) working directory. Otherwise
+    keep the historical behaviour: ``scan_audit.log`` in the current dir.
+    """
+    if getattr(sys, "frozen", False):
+        return pathlib.Path(sys.executable).resolve().parent / "scan_audit.log"
+    return pathlib.Path("scan_audit.log")
+
+
+def _build_audit_handler() -> tuple[logging.Handler, pathlib.Path | None]:
+    """Build a file handler for the audit log, degrading gracefully.
+
+    Creating a ``FileHandler`` opens the file immediately, so on a locked-down
+    machine an unwritable location would raise at import and crash the app on
+    launch (no window). Try the preferred path, then the temp dir, then fall
+    back to a no-op handler so importing this module can never crash.
+
+    Returns (handler, resolved_path_or_None).
+    """
+    import tempfile
+
+    candidates = [
+        _default_audit_log_path(),
+        pathlib.Path(tempfile.gettempdir()) / "scan_audit.log",
+    ]
+    for path in candidates:
+        try:
+            handler = logging.FileHandler(path, encoding="utf-8")
+        except OSError:
+            continue
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        return handler, path
+    return logging.NullHandler(), None
+
 
 _audit_logger = logging.getLogger("zap_audit")
-_audit_handler = logging.FileHandler(AUDIT_LOG, encoding="utf-8")
-_audit_handler.setFormatter(logging.Formatter("%(message)s"))
+_audit_handler, AUDIT_LOG = _build_audit_handler()
 _audit_logger.addHandler(_audit_handler)
 _audit_logger.setLevel(logging.INFO)
 
@@ -797,11 +833,22 @@ def _report_json(
     manual_findings: list[dict[str, Any]] | None = None,
     business_context: dict[str, str] | None = None,
     regulatory_framework: str = "none",
+    modules_run: list[str] | None = None,
 ) -> None:
     merged, has_manual = _prepare_findings(alerts, manual_findings)
 
+    summary = _summary(target, scan_type, alerts)
+    # Make the coverage scope explicit in structured output so downstream
+    # consumers cannot mistake a no-ZAP run for a full assessment.
+    summary["zap_performed"] = not _is_modules_only(scan_type)
+    if _is_modules_only(scan_type):
+        summary["modules_run"] = modules_run or []
+        summary["coverage_note"] = (
+            "Custom modules only; no OWASP ZAP active vulnerability scan performed."
+        )
+
     report: dict[str, Any] = {
-        "summary": _summary(target, scan_type, alerts),
+        "summary": summary,
         "alerts": alerts,
         "merged_findings": merged,
     }
@@ -1039,6 +1086,29 @@ _SEVERITY_IMPACT_SUMMARY: dict[str, str] = {
 }
 
 
+# Human-readable descriptions of the custom security modules, keyed by their
+# CLI name (see run_modules.ALL_MODULES). Used to describe the reduced-scope
+# "no-ZAP" report honestly.
+_MODULE_DISPLAY_NAMES = {
+    "auth": "Authentication testing (login discovery, cleartext submission, CSRF token rotation, default credentials, brute-force protection)",
+    "supply-chain": "Supply-chain checks (JavaScript library CVEs, Subresource Integrity, manifests)",
+    "prompt-injection": "LLM/chatbot detection and prompt-injection checks",
+    "ransomware": "Ransomware-readiness checks (exposed admin panels, security headers, directory listing, backup/sensitive files)",
+    "authenticated-scan": "Authenticated crawl with broken-access-control and IDOR heuristics",
+    "tls": "TLS/certificate checks (certificate validity, protocol versions, cipher strength, HSTS)",
+    "api-discovery": "API surface discovery (OpenAPI/Swagger specs, JS-embedded endpoints, GraphQL introspection)",
+}
+
+
+def _is_modules_only(scan_type: str) -> bool:
+    """True when the report was produced by the standalone custom modules with
+    no OWASP ZAP scan (run_modules.py / gui_app.py pass scan_type='modules').
+
+    ZAP-backed paths (zap_scan.py, assess.py) use 'baseline'/'full'/'api'.
+    """
+    return scan_type == "modules"
+
+
 def _section_executive_summary(
     findings: list[dict[str, Any]],
     scan_type: str,
@@ -1053,6 +1123,7 @@ def _section_executive_summary(
 ) -> list[str]:
     """Section 1: Executive Summary."""
     lines: list[str] = []
+    modules_only = _is_modules_only(scan_type)
     lines.append("# Vulnerability Assessment Report\n")
 
     # Entity info if provided
@@ -1063,14 +1134,35 @@ def _section_executive_summary(
     lines.append(f"- **Assessment Date**: {assessment_date}")
     lines.append(f"- **Assessor**: {assessor_name}")
     lines.append(f"- **Target URL**: {target}")
-    lines.append(f"- **Scan Type**: {scan_type}")
-    methodology_parts = ["Automated (OWASP ZAP)"]
+    if modules_only:
+        lines.append("- **Scan Type**: Custom modules only (no OWASP ZAP scan)")
+    else:
+        lines.append(f"- **Scan Type**: {scan_type}")
+    if modules_only:
+        methodology_parts = ["Automated (custom security modules only — OWASP ZAP active scan NOT performed)"]
+    else:
+        methodology_parts = ["Automated (OWASP ZAP)"]
     if has_manual:
         methodology_parts.append("Manual Testing")
     lines.append(f"- **Methodology**: {' + '.join(methodology_parts)}")
     if timestamp:
         lines.append(f"- **Report Generated**: {timestamp}")
     lines.append("")
+
+    # Prominent reduced-scope banner so a reader cannot mistake "ZAP was not
+    # run" for "ZAP ran and found nothing".
+    if modules_only:
+        lines.append(
+            "> **Reduced-scope assessment — OWASP ZAP was NOT run.** This report "
+            "was produced by the standalone custom security modules only. It does "
+            "**not** include a full active vulnerability or injection scan "
+            "(no generalized XSS, SQL injection, or other active ZAP testing was "
+            "performed). Consequently, the absence of a finding below means only "
+            "that the specific checks listed in Section 5 did not flag it — it is "
+            "**not** evidence that the target is free of vulnerabilities. For "
+            "full-coverage results, re-run via `assess.py` with OWASP ZAP available."
+        )
+        lines.append("")
 
     lines.append("## 1. Executive Summary\n")
 
@@ -1292,26 +1384,67 @@ def _section_recommendations(findings: list[dict[str, Any]]) -> list[str]:
     return lines
 
 
+def _auth_scan_login_failed(findings: list[dict[str, Any]]) -> bool:
+    """True if the authenticated-scan module recorded a login failure.
+
+    Detected via the stable alert name emitted by
+    authenticated_scan.run_scan() when login_and_get_session() returns None
+    ("Authenticated Scanning Skipped - Login Failed").
+    """
+    return any(
+        "authenticated scanning skipped" in (f.get("alert", "") or "").lower()
+        for f in findings
+    )
+
+
 def _section_scope_methodology(
     target: str,
     scan_type: str,
     exclude_urls: list[str] | None,
     has_manual: bool,
+    modules_run: list[str] | None = None,
+    findings: list[dict[str, Any]] | None = None,
 ) -> list[str]:
     """Section 5: Testing Scope & Methodology (appendix)."""
     lines: list[str] = []
+    modules_only = _is_modules_only(scan_type)
+    auth_login_failed = _auth_scan_login_failed(findings or [])
     lines.append("## 5. Testing Scope & Methodology\n")
 
     # Tools used
     lines.append("### Tools Used\n")
-    lines.append("- OWASP ZAP (automated vulnerability scanner)")
+    if modules_only:
+        lines.append(
+            "- Custom Python security modules (this toolkit's `run_modules.py` / GUI)"
+        )
+        lines.append(
+            "- OWASP ZAP was **NOT** used — no automated active vulnerability "
+            "scanner was run for this assessment"
+        )
+    else:
+        lines.append("- OWASP ZAP (automated vulnerability scanner)")
     if has_manual:
         lines.append("- Manual testing (findings provided via --manual-findings)")
     lines.append("")
 
     # Test types performed
     lines.append("### Test Types Performed\n")
-    if scan_type == "baseline":
+    if modules_only:
+        if modules_run:
+            for m in modules_run:
+                if m == "authenticated-scan" and auth_login_failed:
+                    lines.append(
+                        f"- {_MODULE_DISPLAY_NAMES.get(m, m)} — login failed, "
+                        "authenticated crawl NOT performed (only the initial "
+                        "login attempt was made)"
+                    )
+                else:
+                    lines.append(f"- {_MODULE_DISPLAY_NAMES.get(m, m)}")
+        else:
+            lines.append(
+                "- Custom security modules were run (specific module list not recorded)"
+            )
+    elif scan_type == "baseline":
         lines.append("- Passive vulnerability scanning (baseline)")
         lines.append("- Spider/crawler for page discovery")
     elif scan_type == "full":
@@ -1329,11 +1462,29 @@ def _section_scope_methodology(
     # Test types NOT performed
     lines.append("### Test Types Not Performed\n")
     not_performed: list[str] = []
+    if modules_only:
+        not_performed.append(
+            "Active vulnerability scanning (OWASP ZAP) was NOT performed — "
+            "no spider/crawler-driven active scan"
+        )
+        not_performed.append(
+            "No generalized injection testing (XSS, SQL injection, command "
+            "injection, path traversal, etc.); only the named module checks "
+            "above were carried out"
+        )
+        # Name the module checks that were NOT run this time.
+        run_set = set(modules_run or [])
+        skipped = [m for m in _MODULE_DISPLAY_NAMES if m not in run_set]
+        if modules_run and skipped:
+            not_performed.append(
+                "The following available module checks were not selected for "
+                "this run: " + ", ".join(sorted(skipped))
+            )
     if scan_type == "baseline":
         not_performed.append("Active vulnerability scanning was not performed (baseline scan only)")
     if not has_manual:
         not_performed.append("Manual business logic testing was not performed")
-    if scan_type != "api":
+    if scan_type != "api" and not modules_only:
         not_performed.append("API-specific endpoint testing was not performed")
     if not_performed:
         for np in not_performed:
@@ -1415,9 +1566,13 @@ def _map_finding_to_dora_category(finding: dict[str, Any]) -> str:
     return best_match
 
 
-def _section_dora_alignment(findings: list[dict[str, Any]]) -> list[str]:
+def _section_dora_alignment(
+    findings: list[dict[str, Any]],
+    scan_type: str = "",
+) -> list[str]:
     """Section 6: Regulatory Alignment — DORA (conditional)."""
     lines: list[str] = []
+    modules_only = _is_modules_only(scan_type)
     lines.append("## 6. Regulatory Alignment — DORA\n")
 
     lines.append(
@@ -1428,6 +1583,19 @@ def _section_dora_alignment(findings: list[dict[str, Any]]) -> list[str]:
         "Penetration Testing (TLPT) engagement under Article 26, nor a "
         "formal compliance assessment under the DORA regulation.\n"
     )
+
+    if modules_only:
+        lines.append(
+            "> **Scope limitation for this mapping**: This assessment ran the "
+            "custom module checks only (authentication, supply-chain, TLS, API "
+            "discovery, admin-panel/security-header, and prompt-injection "
+            "checks) and did **not** perform a full active vulnerability "
+            "assessment. The categories below therefore reflect coverage of "
+            "those specific named checks against the target — they must not be "
+            "read as evidence of comprehensive ICT risk coverage. A category "
+            "with no findings may simply not have been exercised by the modules "
+            "that were run.\n"
+        )
 
     # Group findings by DORA category
     categorized: dict[str, list[dict[str, Any]]] = {
@@ -1506,6 +1674,7 @@ def _build_report_sections(
     assessment_date: str = "",
     exclude_urls: list[str] | None = None,
     timestamp: str = "",
+    modules_run: list[str] | None = None,
 ) -> list[str]:
     """Assemble all report sections in order, returning Markdown lines."""
     all_lines: list[str] = []
@@ -1532,12 +1701,12 @@ def _build_report_sections(
 
     # Section 5: Testing Scope & Methodology
     all_lines.extend(_section_scope_methodology(
-        target, scan_type, exclude_urls, has_manual,
+        target, scan_type, exclude_urls, has_manual, modules_run, findings,
     ))
 
     # Section 6: DORA Alignment (conditional)
     if regulatory_framework == "dora":
-        all_lines.extend(_section_dora_alignment(findings))
+        all_lines.extend(_section_dora_alignment(findings, scan_type))
 
     # Section 7: Disclaimer
     all_lines.extend(_section_disclaimer(has_manual))
@@ -1565,6 +1734,7 @@ def _report_md(
     regulatory_framework: str = "none",
     business_context: dict[str, str] | None = None,
     exclude_urls: list[str] | None = None,
+    modules_run: list[str] | None = None,
 ) -> None:
     merged, has_manual = _prepare_findings(alerts, manual_findings)
     ts = _summary(target, scan_type, alerts)["timestamp"]
@@ -1582,6 +1752,7 @@ def _report_md(
         assessment_date=assessment_date,
         exclude_urls=exclude_urls,
         timestamp=ts,
+        modules_run=modules_run,
     )
 
     out.write_text("\n".join(lines), encoding="utf-8")
@@ -1605,6 +1776,11 @@ _HTML_TEMPLATE = """\
     max-width: 960px;
     margin: 0 auto;
     padding: 2rem;
+    /* Preserve severity backgrounds / zebra striping when printing to PDF,
+       without the user having to enable "Background graphics" manually.
+       print-color-adjust is inherited, so setting it here covers descendants. */
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
   }}
   h1 {{ color: #1a1a2e; border-bottom: 2px solid #e94560; padding-bottom: 0.5rem; }}
   h2 {{ color: #16213e; margin-top: 2rem; border-bottom: 1px solid #ddd; padding-bottom: 0.3rem; }}
@@ -1619,6 +1795,9 @@ _HTML_TEMPLATE = """\
     border: 1px solid #ddd;
     padding: 8px 12px;
     text-align: left;
+    /* Belt-and-suspenders: break any unusually long token so it never
+       overflows a cell and clips off the page edge when printed. */
+    overflow-wrap: anywhere;
   }}
   th {{ background-color: #f4f4f4; font-weight: 600; }}
   tr:nth-child(even) {{ background-color: #fafafa; }}
@@ -1641,6 +1820,22 @@ _HTML_TEMPLATE = """\
   .severity-medium {{ color: #f57c00; font-weight: bold; }}
   .severity-low {{ color: #1976d2; }}
   .severity-informational {{ color: #757575; }}
+  /* Each technical finding is wrapped in .finding so it can be kept together
+     when printing. No visual effect on screen. */
+  .finding {{ margin-bottom: 0.5rem; }}
+
+  @media print {{
+    @page {{ margin: 1.5cm; }}
+    /* Use the full printable width instead of the on-screen 960px column. */
+    body {{ max-width: none; margin: 0; padding: 0; }}
+    /* Keep tables, rows, callouts and whole findings from splitting across
+       a page boundary. */
+    table, thead, tbody, tr {{ break-inside: avoid; }}
+    blockquote {{ break-inside: avoid; }}
+    .finding {{ break-inside: avoid; }}
+    /* Don't leave a heading stranded at the bottom of a page. */
+    h1, h2, h3, h4 {{ break-after: avoid; }}
+  }}
 </style>
 </head>
 <body>
@@ -1660,6 +1855,7 @@ def _md_to_html_basic(md_text: str) -> str:
     in_table = False
     in_list = False
     in_blockquote = False
+    in_finding = False  # inside a per-finding wrapper div (for print break-inside)
 
     for line in md_text.split("\n"):
         stripped = line.strip()
@@ -1711,7 +1907,17 @@ def _md_to_html_basic(md_text: str) -> str:
         m = re.match(r"^(#{1,6})\s+(.*)", stripped)
         if m:
             level = len(m.group(1))
-            text = _inline_md(m.group(2))
+            raw_text = m.group(2)
+            text = _inline_md(raw_text)
+            # Technical findings are emitted as "#### F-001: ...". Wrap each in a
+            # <div class="finding"> so print CSS can keep it on one page.
+            is_finding = level == 4 and re.match(r"^F-\d+:", raw_text) is not None
+            if in_finding and (is_finding or level <= 3):
+                html_lines.append("</div>")
+                in_finding = False
+            if is_finding:
+                html_lines.append('<div class="finding">')
+                in_finding = True
             html_lines.append(f"<h{level}>{text}</h{level}>")
             continue
 
@@ -1759,6 +1965,8 @@ def _md_to_html_basic(md_text: str) -> str:
         html_lines.append("</ul>")
     if in_blockquote:
         html_lines.append("</blockquote>")
+    if in_finding:
+        html_lines.append("</div>")
 
     return "\n".join(html_lines)
 
@@ -1785,6 +1993,7 @@ def _report_html(
     regulatory_framework: str = "none",
     business_context: dict[str, str] | None = None,
     exclude_urls: list[str] | None = None,
+    modules_run: list[str] | None = None,
 ) -> None:
     merged, has_manual = _prepare_findings(alerts, manual_findings)
     ts = _summary(target, scan_type, alerts)["timestamp"]
@@ -1802,6 +2011,7 @@ def _report_html(
         assessment_date=assessment_date,
         exclude_urls=exclude_urls,
         timestamp=ts,
+        modules_run=modules_run,
     )
 
     md_text = "\n".join(md_lines)

@@ -185,6 +185,13 @@ class App:
         ).grid(row=row, column=1, sticky="w", padx=5, pady=(6, 0))
         row += 1
 
+        ttk.Label(
+            parent,
+            text="For PDF: choose HTML, then use your browser's Print > Save as PDF.",
+            foreground="#555",
+        ).grid(row=row, column=1, columnspan=2, sticky="w", padx=5)
+        row += 1
+
         ttk.Label(parent, text="Modules to run").grid(row=row, column=0, sticky="nw", pady=(10, 0))
         modules_frame = ttk.Frame(parent)
         modules_frame.grid(row=row, column=1, columnspan=2, sticky="we", pady=(10, 0))
@@ -382,6 +389,7 @@ class App:
                 exclude_urls=None,
                 manual_findings=None,
                 business_context=None,
+                modules_run=selected,
             )
 
             fmt = self.format_var.get()
@@ -389,6 +397,7 @@ class App:
                 rm._report_json(
                     target, scan_type, alerts, output_path,
                     regulatory_framework=self.framework_var.get(),
+                    modules_run=selected,
                 )
             elif fmt == "html":
                 rm._report_html(target, scan_type, alerts, output_path, **report_kwargs)

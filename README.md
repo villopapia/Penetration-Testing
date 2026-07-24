@@ -207,11 +207,17 @@ Beyond the ZAP scan, the toolkit includes Python-based security modules that run
 | `tls` | Certificate validation, protocol versions, cipher suites, HSTS | No |
 | `api-discovery` | OpenAPI/Swagger spec discovery, JS endpoint extraction, GraphQL introspection | No |
 
-### Running modules standalone
+### Running modules standalone (no-ZAP mode)
+
+`run_modules.py` (and the `gui_app.py` GUI wrapper) is an **officially supported reduced-scope mode**. It needs no ZAP daemon, no `ZAP_API_KEY`, and the `zaproxy`/`zapv2` package does not have to be installed.
 
 ```bash
 python run_modules.py --target https://staging.example.com --modules auth,tls,api-discovery
 ```
+
+**What no-ZAP mode does NOT cover:** it runs only the named module checks below. It does **not** run OWASP ZAP's active vulnerability/injection scan — no generalized XSS, SQL injection, command injection, or path-traversal testing, and no spider-driven active scan. For full coverage, use `assess.py` with ZAP running (next section).
+
+Reports generated in this mode are labelled accordingly: the Executive Summary carries a "Reduced-scope assessment — OWASP ZAP was NOT run" banner, Section 5 (Scope & Methodology) lists exactly which modules ran and states the active/injection scan was not performed, the DORA Alignment section notes the mapping covers only the named checks, and the JSON report sets `summary.zap_performed = false`. A reader cannot mistake "ZAP was not run" for "ZAP ran and found nothing".
 
 ### Running with ZAP (full assessment)
 
